@@ -2,6 +2,6 @@
 while true; do
     echo "Starting Server...."
     node server.cjs
-    echo "Script crashed. Restarting in 5 seconds..."
-    sleep 5
+    echo "Server crashed. Restarting..."
+    sleep 1
 done
