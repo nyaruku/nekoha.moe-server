@@ -110,16 +110,35 @@ const notifyChatClients = (newMessage) => {
 // ###########################
 
 app.get('/api/log/osu', (req, res) => {
-  const query = 'SELECT * FROM osu ORDER BY id DESC LIMIT 50';
+  let limit = parseInt(req.query.limit, 10);
+  let sort = req.query.sort;
+
+  // Validate `limit` (default: 50, fetch all if 0)
+  if (isNaN(limit) || limit < 0) {
+    limit = 0;
+  }
+
+  // Validate `sort` (only allow "asc" or "desc", default to "desc")
+  if (sort !== "asc" && sort !== "desc") {
+    sort = "asc";
+  }
+
+  // Construct query
+  const query = limit === 0 
+    ? `SELECT * FROM osu ORDER BY id ${sort}` 
+    : `SELECT * FROM osu ORDER BY id ${sort} LIMIT ${limit}`;
+
   db.query(query, (err, results) => {
     if (err) {
       console.error('Error fetching entries:', err);
       res.status(500).send('Error fetching entries');
       return;
     }
-    res.json(results); // Send results as JSON response
+    res.json(results);
   });
 });
+
+
 
 // Fetch Chat Messages
 app.get('/api/chat', (req, res) => {
