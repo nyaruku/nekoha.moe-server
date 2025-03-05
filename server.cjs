@@ -110,33 +110,71 @@ const notifyChatClients = (newMessage) => {
 // ###########################
 
 app.get('/api/log/osu', (req, res) => {
-  let limit = parseInt(req.query.limit, 10);
+  let userId = parseInt(req.query.user_id, 10);
+  let username = req.query.username ? req.query.username.trim() : null;
+  let messageFilter = req.query.message ? req.query.message : null;
+  let timeStart = parseInt(req.query.start, 10);
+  let timeEnd = parseInt(req.query.end, 10);
+  let limit = parseInt(req.query.limit, 10); // Ensure it's an integer
   let sort = req.query.sort;
 
-  // Validate `limit` (default: 50, fetch all if 0)
-  if (isNaN(limit) || limit < 0) {
-    limit = 0;
+  let query = "SELECT * FROM osu";
+  let conditions = [];
+  let params = [];
+
+  if (!isNaN(userId) && userId > 0) {
+    conditions.push("user_id = ?");
+    params.push(userId);
   }
 
-  // Validate `sort` (only allow "asc" or "desc", default to "desc")
-  if (sort !== "asc" && sort !== "desc") {
-    sort = "asc";
+  if (username) {
+    conditions.push("username = ?");
+    params.push(username);
   }
 
-  // Construct query
-  const query = limit === 0 
-    ? `SELECT * FROM osu ORDER BY id ${sort}` 
-    : `SELECT * FROM osu ORDER BY id ${sort} LIMIT ${limit}`;
+  if (messageFilter) {
+    conditions.push("message LIKE ?");
+    params.push(`%${messageFilter}%`);
+  }
 
-  db.query(query, (err, results) => {
+  if (!isNaN(timeStart)) {
+    conditions.push("timestamp >= ?");
+    params.push(timeStart);
+  }
+
+  if (!isNaN(timeEnd)) {
+    conditions.push("timestamp <= ?");
+    params.push(timeEnd);
+  }
+
+  if (conditions.length > 0) {
+    query += " WHERE " + conditions.join(" AND ");
+  }
+
+  if (sort === "asc" || sort === "desc") {
+    query += ` ORDER BY id ${sort}`;
+  } else {
+    query += " ORDER BY id ASC";
+  }
+
+  // FIX: Remove the parameterized `LIMIT ?`
+  if (!isNaN(limit) && limit > 0) {
+    query += ` LIMIT ${limit}`;  // Directly injecting the integer
+  }
+
+  console.log("Executing query:", query);
+  console.log("With parameters:", params);
+
+  db.execute(query, params, (err, results) => {
     if (err) {
-      console.error('Error fetching entries:', err);
-      res.status(500).send('Error fetching entries');
+      console.error("Error fetching entries:", err);
+      res.status(500).send("Error fetching entries");
       return;
     }
     res.json(results);
   });
 });
+
 
 
 
