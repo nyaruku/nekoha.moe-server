@@ -224,6 +224,7 @@ server.listen(port, () => {
 
 // DISCORD WEBHOOKS
 const logOsu = new Webhook(process.env.WEBHOOK_OSU);
+const logGerman = new Webhook(process.env.WEBHOOK_GERMAN);
 
 const username = process.env.OSU_USERNAME;
 const password = process.env.OSU_IRC_PW;
@@ -241,7 +242,7 @@ const client = new BanchoClient({
     await client.connect();
     console.log("Connected to Bancho!");
 
-    const channelsToJoin = ["#osu"];
+    const channelsToJoin = ["#osu", "#german"];
     const channels = {};
 
     for (const channelName of channelsToJoin) {
@@ -259,7 +260,6 @@ const client = new BanchoClient({
         const newEntry = {
           timestamp: unixTimeInSeconds,
           user_id: message.user.id,
-          avatar_url: avatarUrl,
           username: message.user.ircUsername,
           message: originalMessage
         };
@@ -272,8 +272,8 @@ const client = new BanchoClient({
             logOsu.send();
             // Store message in MySQL
             db.execute(
-              "INSERT INTO osu (timestamp, user_id, avatar_url, username, message) VALUES (?, ?, ?, ?, ?)",
-              [unixTimeInSeconds, message.user.id, avatarUrl, message.user.ircUsername, originalMessage],
+              "INSERT INTO osu (timestamp, user_id, username, message) VALUES (?, ?, ?, ?)",
+              [unixTimeInSeconds, message.user.id, message.user.ircUsername, originalMessage],
               (err) => {
                 if (err) {
                   console.error("Database error:", err);
@@ -286,6 +286,32 @@ const client = new BanchoClient({
             console.error("An error occurred:", error);
           }
         }
+
+        if (channelName == "#german") {
+          logGerman.setUsername(`${message.user.ircUsername}`).setContent(`${message.message}`)
+          logGerman.setAvatarUrl(avatarUrl);
+          try {
+            logGerman.send();
+            // Store message in MySQL
+            db.execute(
+              "INSERT INTO german (timestamp, user_id, username, message) VALUES (?, ?, ?, ?)",
+              [unixTimeInSeconds, message.user.id, message.user.ircUsername, originalMessage],
+              (err) => {
+                if (err) {
+                  console.error("Database error:", err);
+                }
+              }
+            );
+            // Notify clients via WebSocket
+            notifyOsuClients(newEntry);
+          } catch (error) {
+            console.error("An error occurred:", error);
+          }
+        }
+
+
+
+
         // Handle other channels here similarly...
       });
     }
