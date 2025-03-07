@@ -176,11 +176,21 @@ app.get('/api/log', (req, res) => {
     query = `SELECT * FROM ${channel} ${whereClause}`;
   }
 
-  if (sort === "asc" || sort === "desc") {
-    query += ` ORDER BY id ${sort}`;
+
+  if (channel == "all") {
+    if (sort === "asc" || sort === "desc") {
+      query += ` ORDER BY timestamp ${sort}`;
+    } else {
+      query += " ORDER BY timestamp ASC";
+    }
   } else {
-    query += " ORDER BY id ASC";
+    if (sort === "asc" || sort === "desc") {
+      query += ` ORDER BY id ${sort}`;
+    } else {
+      query += " ORDER BY id ASC";
+    }
   }
+  
 
   if (!isNaN(limit) && limit > 0) {
     query += ` LIMIT ${limit}`;
@@ -202,7 +212,6 @@ app.get('/api/log', (req, res) => {
     res.json(results);
   });
 });
-
 
 
 
