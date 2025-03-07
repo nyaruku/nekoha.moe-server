@@ -118,8 +118,9 @@ app.get('/api/log', (req, res) => {
     'help', 'hungarian', 'indonesian', 'italian', 'japanese', 'korean', 'latvian', 'lazer',
     'lobby', 'malaysian', 'mapping', 'modreqs', 'osu', 'osumania', 'polish', 'portuguese',
     'romanian', 'russian', 'skandinavian', 'spanish', 'taiko', 'taiwanese', 'thai', 'turkish',
-    'ukrainian', 'uzbek', 'videogames', 'vietnamese'
+    'ukrainian', 'uzbek', 'videogames', 'vietnamese', 'all'
   ];
+  
   let channel = req.query.channel ? req.query.channel : 'osu'; // Default to 'osu'
 
   if (!allowedChannels.includes(channel)) {
@@ -132,11 +133,12 @@ app.get('/api/log', (req, res) => {
   let timeStart = parseInt(req.query.start, 10);
   let timeEnd = parseInt(req.query.end, 10);
   let limit = parseInt(req.query.limit, 10); // Ensure it's an integer
+  let offset = parseInt(req.query.offset, 10) || 0; // Default offset
   let sort = req.query.sort;
 
-  let query = `SELECT * FROM ${channel}`;  // Use parameterized query to safely insert the table name
+  let query = "";
   let conditions = [];
-  let params = [];  // Add the channel (table name) to the params array
+  let params = [];
 
   if (!isNaN(userId) && userId > 0) {
     conditions.push("user_id = ?");
@@ -163,8 +165,15 @@ app.get('/api/log', (req, res) => {
     params.push(timeEnd);
   }
 
-  if (conditions.length > 0) {
-    query += " WHERE " + conditions.join(" AND ");
+  let whereClause = conditions.length > 0 ? " WHERE " + conditions.join(" AND ") : "";
+
+  if (channel == "all") {
+    query = allowedChannels
+      .filter(ch => ch !== "all") // Exclude "all" from actual table names
+      .map(ch => `SELECT * FROM ${ch} ${whereClause}`)
+      .join(" UNION ALL ");
+  } else {
+    query = `SELECT * FROM ${channel} ${whereClause}`;
   }
 
   if (sort === "asc" || sort === "desc") {
@@ -173,13 +182,16 @@ app.get('/api/log', (req, res) => {
     query += " ORDER BY id ASC";
   }
 
-  // FIX: Remove the parameterized `LIMIT ?`
   if (!isNaN(limit) && limit > 0) {
-    query += ` LIMIT ${limit}`;  // Directly injecting the integer
+    query += ` LIMIT ${limit}`;
   }
 
-  console.log("Executing query:", query);
-  console.log("With parameters:", params);
+  if (!isNaN(offset) && offset > 0) {
+    query += ` OFFSET ${offset}`;
+  }
+
+  // console.log("Executing query:", query);
+  // console.log("With parameters:", params);
 
   db.execute(query, params, (err, results) => {
     if (err) {
@@ -190,6 +202,7 @@ app.get('/api/log', (req, res) => {
     res.json(results);
   });
 });
+
 
 
 
@@ -259,10 +272,10 @@ const client = new BanchoClient({
     console.log("Connected to Bancho!");
 
     const channelsToJoin = [
-      "#announce", "#arabic", "#balkan", "#bulgarian", "#cantonese", "#chinese", "#ctb", "#czechoslovak",
-      "#dutch", "#english", "#estonian", "#filipino", "#finnish", "#french", "#german", "#greek", "#hebrew",
+      "#osu", "#german", "#announce", "#arabic", "#balkan", "#bulgarian", "#cantonese", "#chinese", "#ctb", "#czechoslovak",
+      "#dutch", "#english", "#estonian", "#filipino", "#finnish", "#french", "#greek", "#hebrew",
       "#help", "#hungarian", "#indonesian", "#italian", "#japanese", "#korean", "#latvian", "#lazer",
-      "#lobby", "#malaysian", "#mapping", "#modreqs", "#osu", "#osumania", "#polish", "#portuguese",
+      "#lobby", "#malaysian", "#mapping", "#modreqs", "#osumania", "#polish", "#portuguese",
       "#romanian", "#russian", "#skandinavian", "#spanish", "#taiko", "#taiwanese", "#thai", "#turkish",
       "#ukrainian", "#uzbek", "#videogames", "#vietnamese"
     ];
