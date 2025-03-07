@@ -10,3 +10,5 @@ while true; do
     echo "Server crashed. Restarting..."
     sleep 1
 done
+#StandardOutput=append:/var/log/myserver.log
+#StandardError=append:/var/log/myserver.log

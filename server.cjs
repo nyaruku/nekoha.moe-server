@@ -109,7 +109,23 @@ const notifyChatClients = (newMessage) => {
 //       API Endpoints
 // ###########################
 
-app.get('/api/log/osu', (req, res) => {
+app.get('/api/log', (req, res) => {
+
+  // Sanitize channel input by allowing only specific values
+  const allowedChannels = [
+    'announce', 'arabic', 'balkan', 'bulgarian', 'cantonese', 'chinese', 'ctb', 'czechoslovak',
+    'dutch', 'english', 'estonian', 'filipino', 'finnish', 'french', 'german', 'greek', 'hebrew',
+    'help', 'hungarian', 'indonesian', 'italian', 'japanese', 'korean', 'latvian', 'lazer',
+    'lobby', 'malaysian', 'mapping', 'modreqs', 'osu', 'osumania', 'polish', 'portuguese',
+    'romanian', 'russian', 'skandinavian', 'spanish', 'taiko', 'taiwanese', 'thai', 'turkish',
+    'ukrainian', 'uzbek', 'videogames', 'vietnamese'
+  ];
+  let channel = req.query.channel ? req.query.channel : 'osu'; // Default to 'osu'
+
+  if (!allowedChannels.includes(channel)) {
+    return res.status(400).send('Invalid channel');
+  }
+
   let userId = parseInt(req.query.user_id, 10);
   let username = req.query.username ? req.query.username.trim() : null;
   let messageFilter = req.query.message ? req.query.message : null;
@@ -118,9 +134,9 @@ app.get('/api/log/osu', (req, res) => {
   let limit = parseInt(req.query.limit, 10); // Ensure it's an integer
   let sort = req.query.sort;
 
-  let query = "SELECT * FROM osu";
+  let query = `SELECT * FROM ${channel}`;  // Use parameterized query to safely insert the table name
   let conditions = [];
-  let params = [];
+  let params = [];  // Add the channel (table name) to the params array
 
   if (!isNaN(userId) && userId > 0) {
     conditions.push("user_id = ?");
@@ -168,7 +184,7 @@ app.get('/api/log/osu', (req, res) => {
   db.execute(query, params, (err, results) => {
     if (err) {
       console.error("Error fetching entries:", err);
-      res.status(500).send("Error fetching entries");
+      res.status(500).send("Error fetching chat");
       return;
     }
     res.json(results);
@@ -242,7 +258,15 @@ const client = new BanchoClient({
     await client.connect();
     console.log("Connected to Bancho!");
 
-    const channelsToJoin = ["#osu", "#german"];
+    const channelsToJoin = [
+      "#announce", "#arabic", "#balkan", "#bulgarian", "#cantonese", "#chinese", "#ctb", "#czechoslovak",
+      "#dutch", "#english", "#estonian", "#filipino", "#finnish", "#french", "#german", "#greek", "#hebrew",
+      "#help", "#hungarian", "#indonesian", "#italian", "#japanese", "#korean", "#latvian", "#lazer",
+      "#lobby", "#malaysian", "#mapping", "#modreqs", "#osu", "#osumania", "#polish", "#portuguese",
+      "#romanian", "#russian", "#skandinavian", "#spanish", "#taiko", "#taiwanese", "#thai", "#turkish",
+      "#ukrainian", "#uzbek", "#videogames", "#vietnamese"
+    ];
+
     const channels = {};
 
     for (const channelName of channelsToJoin) {
@@ -254,7 +278,7 @@ const client = new BanchoClient({
       channel.on("message", async (message) => {
         const unixTimeInSeconds = Math.floor(Date.now());
         const originalMessage = message.message;
-        message.message = message.message.replace(/@/g, " ");
+        message.message = message.message.replace(/@/g, " "); // Clean message
         await message.user.fetchFromAPI();
         const avatarUrl = `https://a.ppy.sh/${message.user.id}`;
         const newEntry = {
@@ -264,55 +288,34 @@ const client = new BanchoClient({
           message: originalMessage
         };
 
-        // Send to Discord webhooks
-        if (channelName == "#osu") {
-          logOsu.setUsername(`${message.user.ircUsername}`).setContent(`${message.message}`)
-          logOsu.setAvatarUrl(avatarUrl);
+        // Webhook logic for #osu and #german channels
+        const sendWebhook = (channelName === "#osu" || channelName === "#german");
+
+        if (sendWebhook) {
+          const log = (channelName === "#osu") ? logOsu : logGerman;
+          log.setUsername(`${message.user.ircUsername}`).setContent(`${message.message}`);
+          log.setAvatarUrl(avatarUrl);
           try {
-            logOsu.send();
-            // Store message in MySQL
-            db.execute(
-              "INSERT INTO osu (timestamp, user_id, username, message) VALUES (?, ?, ?, ?)",
-              [unixTimeInSeconds, message.user.id, message.user.ircUsername, originalMessage],
-              (err) => {
-                if (err) {
-                  console.error("Database error:", err);
-                }
-              }
-            );
-            // Notify clients via WebSocket
-            notifyOsuClients(newEntry);
+            log.send();
           } catch (error) {
-            console.error("An error occurred:", error);
+            console.error(`Error sending webhook for ${channelName}:`, error);
           }
         }
 
-        if (channelName == "#german") {
-          logGerman.setUsername(`${message.user.ircUsername}`).setContent(`${message.message}`)
-          logGerman.setAvatarUrl(avatarUrl);
-          try {
-            logGerman.send();
-            // Store message in MySQL
-            db.execute(
-              "INSERT INTO german (timestamp, user_id, username, message) VALUES (?, ?, ?, ?)",
-              [unixTimeInSeconds, message.user.id, message.user.ircUsername, originalMessage],
-              (err) => {
-                if (err) {
-                  console.error("Database error:", err);
-                }
-              }
-            );
-            // Notify clients via WebSocket
-            notifyOsuClients(newEntry);
-          } catch (error) {
-            console.error("An error occurred:", error);
+        // Store message in respective MySQL table
+        const tableName = channelName.slice(1); // Remove '#' to get table name
+        db.execute(
+          `INSERT INTO ${tableName} (timestamp, user_id, username, message) VALUES (?, ?, ?, ?)`,
+          [unixTimeInSeconds, message.user.id, message.user.ircUsername, originalMessage],
+          (err) => {
+            if (err) {
+              console.error("Database error:", err);
+            }
           }
-        }
+        );
 
-
-
-
-        // Handle other channels here similarly...
+        // Notify clients via WebSocket
+        notifyOsuClients(newEntry);
       });
     }
 
