@@ -213,6 +213,34 @@ app.get('/api/log', (req, res) => {
   });
 });
 
+app.get('/api/log/stats', (req, res) => {
+  const query = `
+    SELECT table_name AS tableName,
+           ROUND(((data_length + index_length) / 1024 / 1024), 2) AS sizeMB,
+           table_rows AS rowCount
+    FROM information_schema.TABLES
+    WHERE table_schema = 'osu_logger'
+    ORDER BY table_rows DESC;
+  `;
+
+  db.query(query, (error, results) => {
+    if (error) {
+      console.error('Database query error:', error);
+      return res.status(500).json({ error: error.message });
+    }
+    // Calculate the total size of the database
+    const totalSize = results.reduce((sum, table) => sum + parseFloat(table.sizeMB), 0);
+    // Calculate the total row count of all tables
+    const totalRowCount = results.reduce((sum, table) => sum + parseInt(table.rowCount, 10), 0);
+    res.json({
+      totalDatabaseSizeMB: totalSize.toFixed(2),
+      totalRowCount: totalRowCount,
+      tables: results
+    });
+  });
+});
+
+
 
 
 
