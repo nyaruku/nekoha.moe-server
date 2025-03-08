@@ -53,7 +53,7 @@ const io = require('socket.io')(server, {
 
 // CORS middleware for cross-origin requests
 app.use(cors());
-
+ 
 //////////////////////
 // >> /api/live/osu //
 //////////////////////
@@ -212,7 +212,7 @@ app.get('/api/log', (req, res) => {
     res.json(results);
   });
 });
-
+const { exec } = require('child_process');
 app.get('/api/log/stats', (req, res) => {
   const query = `
     SELECT table_name AS tableName,
@@ -228,17 +228,31 @@ app.get('/api/log/stats', (req, res) => {
       console.error('Database query error:', error);
       return res.status(500).json({ error: error.message });
     }
-    // Calculate the total size of the database
+
+    // Calculate the total size of the database from MySQL metadata
     const totalSize = results.reduce((sum, table) => sum + parseFloat(table.sizeMB), 0);
-    // Calculate the total row count of all tables
     const totalRowCount = results.reduce((sum, table) => sum + parseInt(table.rowCount, 10), 0);
-    res.json({
-      totalDatabaseSizeMB: totalSize.toFixed(2),
-      totalRowCount: totalRowCount,
-      tables: results
+
+    exec("echo '" + process.env.SUDO_PW + "' | sudo -S du -sb /var/lib/mysql/osu_logger", (err, stdout) => {
+      if (err) {
+        console.error("Error executing du command:", err);
+        return res.status(500).json({ error: "Failed to retrieve actual disk usage" });
+      }
+
+      // Extract size from the 'du' output
+      const actualSizeBytes = parseInt(stdout.split("\t")[0], 10);
+      const actualSizeMB = (actualSizeBytes / 1024 / 1024).toFixed(2); // Convert to MB with 2 decimals
+
+      res.json({
+        totalDatabaseSizeMB: totalSize.toFixed(2),
+        actualDiskAllocMB: actualSizeMB,
+        totalRowCount: totalRowCount,
+        tables: results
+      });
     });
   });
 });
+
 
 
 
