@@ -345,12 +345,17 @@ const client = new BanchoClient({
         message.message = message.message.replace(/@/g, " "); // Clean message
         await message.user.fetchFromAPI();
         const avatarUrl = `https://a.ppy.sh/${message.user.id}`;
-        const newEntry = {
-          timestamp: unixTimeInSeconds,
-          user_id: message.user.id,
-          username: message.user.ircUsername,
-          message: originalMessage
-        };
+        
+        if (channelName === "#osu") {
+          const newEntry = {
+            timestamp: unixTimeInSeconds,
+            user_id: message.user.id,
+            username: message.user.ircUsername,
+            message: originalMessage
+          };        
+          // Notify clients via WebSocket
+          notifyOsuClients(newEntry);
+        }
 
         // Webhook logic for #osu and #german channels
         const sendWebhook = (channelName === "#osu" || channelName === "#german");
@@ -377,9 +382,6 @@ const client = new BanchoClient({
             }
           }
         );
-
-        // Notify clients via WebSocket
-        notifyOsuClients(newEntry);
       });
     }
 
