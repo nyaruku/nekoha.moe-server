@@ -1,13 +1,8 @@
-const { BanchoClient, OutgoingBanchoMessage, BanchoChannel } = require("bancho.js");
-const { Webhook } = require('@vermaysha/discord-webhook');
 const mysql = require('mysql2');
-const { Client, GatewayIntentBits } = require('discord.js');
 const express = require('express');
 const cors = require('cors');
-const { Server } = require('socket.io');
-const fs = require('fs');
-const https = require('https');
 const http = require('http');
+const { BanchoClient, OutgoingBanchoMessage, BanchoChannel } = require("bancho.js");
 
 // Import Secrets
 require('dotenv').config({ path: 'secret.env' });
@@ -15,28 +10,43 @@ require('dotenv').config({ path: 'secret.env' });
 // ###########################
 //     DATABASE CONNECTION
 // ###########################
-const db = mysql.createConnection({
+const db = mysql.createPool({
   host: process.env.DB_HOST,
   user: process.env.DB_USER,
   password: process.env.DB_PW,
   database: process.env.DB_NAME_LOGGER,
-  connectionLimit: 10
+
+  waitForConnections: true,
+  connectionLimit: 1000,
+  maxIdle: 1000, // max idle connections, the default value is the same as `connectionLimit`
+  idleTimeout: 60000, // idle connections timeout, in milliseconds, the default value 60000
+  queueLimit: 0,
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 0,
 });
-const db_nekoha = mysql.createConnection({
+const db_nekoha = mysql.createPool({
   host: process.env.DB_HOST,
   user: process.env.DB_USER,
   password: process.env.DB_PW,
-  database: process.env.DB_NAME_MAIN,  // Ensure this database exists
-  connectionLimit: 10
+  database: process.env.DB_NAME_MAIN,
+
+  waitForConnections: true,
+  connectionLimit: 1000,
+  maxIdle: 1000, // max idle connections, the default value is the same as `connectionLimit`
+  idleTimeout: 60000, // idle connections timeout, in milliseconds, the default value 60000
+  queueLimit: 0,
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 0,
 });
 
 // MySQL database connection test
-db.connect((err) => {
+db.getConnection((err, connection) => {
   if (err) {
     console.error('Error connecting to MySQL:', err);
     return;
   }
-  console.log('Connected to MySQL');
+  console.log('Connected to MySQL (Connection Pool)');
+  connection.release(); // Always release the connection back to the pool
 });
 
 // ###########################
@@ -212,6 +222,9 @@ app.get('/api/log', (req, res) => {
     res.json(results);
   });
 });
+
+
+
 const { exec } = require('child_process');
 app.get('/api/log/stats', (req, res) => {
   const query = `
@@ -254,10 +267,6 @@ app.get('/api/log/stats', (req, res) => {
 });
 
 
-
-
-
-
 // Fetch Chat Messages
 app.get('/api/chat', (req, res) => {
   db_nekoha.query("SELECT * FROM chat ORDER BY id DESC LIMIT 50", (err, results) => {
@@ -298,13 +307,11 @@ server.listen(port, () => {
   console.log(`Server running on http://localhost:${port}`);
 });
 
-// ###########################
-//      WEBHOOK AND IRC
-// ###########################
 
-// DISCORD WEBHOOKS
-const logOsu = new Webhook(process.env.WEBHOOK_OSU);
-const logGerman = new Webhook(process.env.WEBHOOK_GERMAN);
+
+// ###########################
+//         IRC LOGGER
+// ###########################
 
 const username = process.env.OSU_USERNAME;
 const password = process.env.OSU_IRC_PW;
@@ -357,20 +364,6 @@ const client = new BanchoClient({
           notifyOsuClients(newEntry);
         }
 
-        // Webhook logic for #osu and #german channels
-        const sendWebhook = (channelName === "#osu" || channelName === "#german");
-
-        if (sendWebhook) {
-          const log = (channelName === "#osu") ? logOsu : logGerman;
-          log.setUsername(`${message.user.ircUsername}`).setContent(`${message.message}`);
-          log.setAvatarUrl(avatarUrl);
-          try {
-            log.send();
-          } catch (error) {
-            console.error(`Error sending webhook for ${channelName}:`, error);
-          }
-        }
-
         // Store message in respective MySQL table
         const tableName = channelName.slice(1); // Remove '#' to get table name
         db.execute(
@@ -392,38 +385,3 @@ const client = new BanchoClient({
     console.error("An error occurred:", error);
   }
 })();
-
-
-// ###########################
-//       DISCORD BOT
-// ###########################
-
-// Discord Bot Logic
-const discordclient = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ],
-});
-
-discordclient.once('ready', () => {
-  console.log(`Logged in as ${discordclient.user.tag}!`);
-});
-
-discordclient.on('messageCreate', async (message) => {
-  try {
-    // Ignore bot messages
-    if (message.author.bot) return;
-
-    // Handle specific channel commands
-    if (message.author.id == 'your_owner_id_here') {
-      // Handle other channels similarly...
-    }
-  } catch (error) {
-    console.error("An error occurred:", error);
-  }
-});
-
-// Login to Discord
-discordclient.login(process.env.DISCORD_BOT_TOKEN);
