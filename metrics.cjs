@@ -1,33 +1,34 @@
-const express = require("express");
-const client = require("prom-client");
-const cors = require("cors");
+const express = require('express');
+const client = require('prom-client');
 
 const app = express();
+const port = 7270;
+
+// Create a Registry which registers the metrics
 const register = new client.Registry();
 
-app.use(cors()); // Allow cross-origin requests
+// Add default metrics to the registry
+client.collectDefaultMetrics({ register });
 
-// Create a Counter metric for website visits
-const visitCounter = new client.Counter({
-  name: "website_visits_total",
-  help: "Total number of visits to the website",
+// Custom metric - Counter
+const requestCounter = new client.Counter({
+  name: 'http_requests_total',
+  help: 'Total number of HTTP requests',
+  labelNames: ['method', 'endpoint']
 });
-register.registerMetric(visitCounter);
 
-// Expose metrics at /metrics
-app.get("/metrics", async (req, res) => {
-  res.set("Content-Type", register.contentType);
+// Increment the counter on each request
+app.use((req, res, next) => {
+  requestCounter.inc({ method: req.method, endpoint: req.url });
+  next();
+});
+
+// Expose /metrics endpoint for Prometheus
+app.get('/metrics', async (req, res) => {
+  res.set('Content-Type', register.contentType);
   res.end(await register.metrics());
 });
 
-// Track visits when hitting this API
-app.get("/track-visit", (req, res) => {
-  visitCounter.inc(); // Increment counter
-  res.send("Visit tracked");
-});
-
-// Start the server on port 9000
-const PORT = 9000;
-app.listen(PORT, () => {
-  console.log(`Metrics server running on http://localhost:${PORT}/metrics`);
+app.listen(port, () => {
+  console.log(`Node.js app listening on http://localhost:${port}`);
 });
