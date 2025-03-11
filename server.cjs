@@ -2,8 +2,6 @@ const mysql = require('mysql2');
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
-const { BanchoClient, OutgoingBanchoMessage, BanchoChannel } = require("bancho.js");
-
 
 // Import Secrets
 require('dotenv').config({ path: 'secret.env' });
@@ -307,82 +305,3 @@ app.post('/api/chat', (req, res) => {
 server.listen(port, () => {
   console.log(`Server running on http://localhost:${port}`);
 });
-
-
-
-// ###########################
-//         IRC LOGGER
-// ###########################
-
-const username = process.env.OSU_USERNAME;
-const password = process.env.OSU_IRC_PW;
-const apiKey = process.env.OSU_API_KEY;
-const client = new BanchoClient({
-  username,
-  password,
-  apiKey,
-});
-
-// Bancho Client Logic - Listening to messages
-(async () => {
-  try {
-    console.log("Discord Bot Launched");
-    await client.connect();
-    console.log("Connected to Bancho!");
-
-    const channelsToJoin = [
-      "#osu", "#german", "#announce", "#arabic", "#balkan", "#bulgarian", "#cantonese", "#chinese", "#ctb", "#czechoslovak",
-      "#dutch", "#english", "#estonian", "#filipino", "#finnish", "#french", "#greek", "#hebrew",
-      "#help", "#hungarian", "#indonesian", "#italian", "#japanese", "#korean", "#latvian", "#lazer",
-      "#lobby", "#malaysian", "#mapping", "#modreqs", "#osumania", "#polish", "#portuguese",
-      "#romanian", "#russian", "#skandinavian", "#spanish", "#taiko", "#taiwanese", "#thai", "#turkish",
-      "#ukrainian", "#uzbek", "#videogames", "#vietnamese"
-    ];
-
-    const channels = {};
-
-    for (const channelName of channelsToJoin) {
-      const channel = client.getChannel(channelName);
-      await channel.join();
-      channels[channelName] = channel;
-      console.log(`Joined ${channelName} channel!`);
-
-      channel.on("message", async (message) => {
-        const unixTimeInSeconds = Math.floor(Date.now());
-        const originalMessage = message.message;
-        message.message = message.message.replace(/@/g, " "); // Clean message
-        await message.user.fetchFromAPI();
-        const avatarUrl = `https://a.ppy.sh/${message.user.id}`;
-        
-        if (channelName === "#osu") {
-          const newEntry = {
-            timestamp: unixTimeInSeconds,
-            user_id: message.user.id,
-            username: message.user.ircUsername,
-            message: originalMessage
-          };        
-          // Notify clients via WebSocket
-          notifyOsuClients(newEntry);
-        }
-
-        // Store message in respective MySQL table
-        const tableName = channelName.slice(1); // Remove '#' to get table name
-        db.execute(
-          `INSERT INTO ${tableName} (timestamp, user_id, username, message) VALUES (?, ?, ?, ?)`,
-          [unixTimeInSeconds, message.user.id, message.user.ircUsername, originalMessage],
-          (err) => {
-            if (err) {
-              console.error("Database error:", err);
-            }
-          }
-        );
-      });
-    }
-
-    client.on("disconnect", () => {
-      console.log("Disconnected from Bancho!");
-    });
-  } catch (error) {
-    console.error("An error occurred:", error);
-  }
-})();
