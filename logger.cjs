@@ -126,19 +126,29 @@ setInterval(() => {
 
 app.get("/api2/insert", (req, res) => {
   const oneHourAgo = Date.now() - 3600000;
-    let dataPoints = [];
+  let dataPoints = [];
 
-    // Group inserts into per-minute intervals
-    for (let i = 0; i < 60; i++) {
-        const startTime = oneHourAgo + i * 60000;
-        const endTime = startTime + 60000;
+  // Group inserts into per-minute intervals
+  for (let i = 0; i < 60; i++) {
+    const startTime = oneHourAgo + i * 60000;
+    const count = insertHistory.filter(ts => ts >= startTime && ts < startTime + 60000).length;
 
-        const count = insertHistory.filter(ts => ts >= startTime && ts < endTime).length;
-        dataPoints.push({
-            timestamp: new Date(startTime).toISOString(),
-            inserts_per_minute: count
-        });
-    }
+    // Append as time series data
+    dataPoints.push([startTime, count]);
+  }
 
-    res.json(dataPoints);
+  res.json({
+    results: [
+      {
+        statement_id: 0,
+        series: [
+          {
+            name: "inserts_per_minute",
+            columns: ["time", "value"],
+            values: dataPoints
+          }
+        ]
+      }
+    ]
+  });
 });
