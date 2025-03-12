@@ -228,7 +228,7 @@ const { exec } = require('child_process');
 app.get('/api/log/stats', (req, res) => {
   const query = `
     SELECT table_name AS tableName,
-           ROUND(((data_length + index_length) / 1024 / 1024), 2) AS sizeMB,
+           (data_length + index_length) AS sizeMB,
            table_rows AS rowCount
     FROM information_schema.TABLES
     WHERE table_schema = 'osu_logger'
@@ -253,11 +253,11 @@ app.get('/api/log/stats', (req, res) => {
 
       // Extract size from the 'du' output
       const actualSizeBytes = parseInt(stdout.split("\t")[0], 10);
-      const actualSizeMB = (actualSizeBytes / 1024 / 1024).toFixed(2); // Convert to MB with 2 decimals
+      const actualSizeMB = actualSizeBytes // Convert to MB with 2 decimals
 
       res.json({
-        totalDatabaseSizeMB: totalSize.toFixed(2),
-        actualDiskAllocMB: actualSizeMB,
+        totalDatabaseSizeBytes: totalSize,
+        actualDiskAllocBytes: actualSizeMB,
         totalRowCount: totalRowCount,
         tables: results
       });
