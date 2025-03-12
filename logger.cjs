@@ -3,7 +3,13 @@
 //         IRC LOGGER
 // ###########################
 
+// global 
+let insertCount = 0;
+let insertError = 0;
+
 const mysql = require('mysql2');
+const express = require('express');
+const http = require('http');
 
 // Import Secrets
 require('dotenv').config({ path: 'secret.env' });
@@ -67,13 +73,15 @@ const client = new BanchoClient({
 
         // Store message in respective MySQL table
         const tableName = channelName.slice(1); // Remove '#' to get table name
+        insertCount++;
         db.execute(
           `INSERT INTO ${tableName} (timestamp, user_id, username, message) VALUES (?, ?, ?, ?)`,
           [unixTimeInSeconds, message.user.id, message.user.ircUsername, originalMessage],
           (err) => {
             if (err) {
+              insertError++;
               console.error("Database error:", err);
-            }
+            }           
           }
         );
       });
@@ -86,3 +94,30 @@ const client = new BanchoClient({
     console.error("An error occurred:", error);
   }
 })();
+
+// ###########################
+//     INSERTS PER MINUTE
+// ###########################
+
+
+
+const app = express();
+const port = 5001;
+const server = http.createServer(app);
+
+// Start the server
+server.listen(port, () => {
+  console.log(`Server running on http://localhost:${port}`);
+});
+
+setInterval(() => {
+  insertCount = 0;
+  insertError = 0;
+}, 60000);
+
+app.get("/api2/insert", (req, res) => {
+  res.json({
+    insertRate: insertCount,
+    errorRate: insertError
+  });
+});
