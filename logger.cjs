@@ -6,6 +6,16 @@
 // global 
 let insertCount = 0;
 let insertError = 0;
+let insertHistory = []; // Store timestamps of inserts
+
+function recordInsert(success = true) {
+  insertHistory.push(Date.now());
+
+  // Keep only the last 60 minutes of data
+  const oneHourAgo = Date.now() - 3600000;
+  insertHistory = insertHistory.filter(ts => ts > oneHourAgo);
+}
+
 
 const mysql = require('mysql2');
 const express = require('express');
@@ -73,13 +83,13 @@ const client = new BanchoClient({
 
         // Store message in respective MySQL table
         const tableName = channelName.slice(1); // Remove '#' to get table name
-        insertCount++;
+        recordInsert(true);
         db.execute(
           `INSERT INTO ${tableName} (timestamp, user_id, username, message) VALUES (?, ?, ?, ?)`,
           [unixTimeInSeconds, message.user.id, message.user.ircUsername, originalMessage],
           (err) => {
             if (err) {
-              insertError++;
+              recordInsert(false);
               console.error("Database error:", err);
             }           
           }
@@ -111,13 +121,24 @@ server.listen(port, () => {
 });
 
 setInterval(() => {
-  insertCount = 0;
   insertError = 0;
 }, 60000);
 
 app.get("/api2/insert", (req, res) => {
-  res.json({
-    insertRate: insertCount,
-    errorRate: insertError
-  });
+  const oneHourAgo = Date.now() - 3600000;
+    let dataPoints = [];
+
+    // Group inserts into per-minute intervals
+    for (let i = 0; i < 60; i++) {
+        const startTime = oneHourAgo + i * 60000;
+        const endTime = startTime + 60000;
+
+        const count = insertHistory.filter(ts => ts >= startTime && ts < endTime).length;
+        dataPoints.push({
+            timestamp: new Date(startTime).toISOString(),
+            inserts_per_minute: count
+        });
+    }
+
+    res.json(dataPoints);
 });
