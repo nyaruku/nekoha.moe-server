@@ -2,6 +2,8 @@ const mysql = require('mysql2');
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 
 // Import Secrets
 require('dotenv').config({ path: 'secret.env' });
@@ -222,8 +224,6 @@ app.get('/api/log', (req, res) => {
   });
 });
 
-
-
 const { exec } = require('child_process');
 app.get('/api/log/stats', (req, res) => {
   const query = `
@@ -260,6 +260,42 @@ app.get('/api/log/stats', (req, res) => {
         actualDiskAllocBytes: actualSizeMB,
         totalRowCount: totalRowCount,
         tables: results
+      });
+    });
+  });
+});
+
+
+app.get('/api/log/export', (req, res) => {
+  const fileName = `chat_log_mysqldump_${Date.now()}.sql`;
+  const filePath = path.join(__dirname, 'backups', fileName);
+
+  // Ensure the backups directory exists
+  if (!fs.existsSync(path.dirname(filePath))) {
+    fs.mkdirSync(path.dirname(filePath));
+  }
+
+  // Create MySQL dump command
+  const dumpCommand = `mysqldump --user=${process.env.DB_USER} --password=${process.env.DB_PW} --host=${process.env.DB_HOST} ${process.env.DB_NAME_LOGGER} > ${filePath}`;
+
+  // Execute the command to export the database
+  exec(dumpCommand, (error, stdout, stderr) => {
+    if (error) {
+      console.error('Error exporting database:', error);
+      return res.status(500).json({ error: 'Failed to export database' });
+    }
+    // Send the backup file to the client
+    res.download(filePath, fileName, (err) => {
+      if (err) {
+        console.error('Error sending file:', err);
+        return res.status(500).json({ error: 'Failed to send database backup' });
+      }
+
+      // Optionally, delete the file after download
+      fs.unlink(filePath, (unlinkErr) => {
+        if (unlinkErr) {
+          console.error('Error deleting backup file:', unlinkErr);
+        }
       });
     });
   });
