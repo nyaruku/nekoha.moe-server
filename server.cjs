@@ -4,13 +4,27 @@ const cors = require('cors');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-
-// Import Secrets
+const { format } = require('date-fns');
 require('dotenv').config({ path: 'secret.env' });
 
-// ###########################
-//     DATABASE CONNECTION
-// ###########################
+const allowedChannels = [
+  'announce', 'arabic', 'balkan', 'bulgarian', 'cantonese', 'chinese', 'ctb', 'czechoslovak',
+  'dutch', 'english', 'estonian', 'filipino', 'finnish', 'french', 'german', 'greek', 'hebrew',
+  'help', 'hungarian', 'indonesian', 'italian', 'japanese', 'korean', 'latvian', 'lazer',
+  'lobby', 'malaysian', 'mapping', 'modreqs', 'osu', 'osumania', 'polish', 'portuguese',
+  'romanian', 'russian', 'skandinavian', 'spanish', 'taiko', 'taiwanese', 'thai', 'turkish',
+  'ukrainian', 'uzbek', 'videogames', 'vietnamese'
+];
+
+// Helper function to format Unix epoch timestamps
+const formatTimestamp = (epochMs) => {
+  if (!epochMs || isNaN(epochMs)) return ''; // Handle invalid timestamps
+  return format(new Date(parseInt(epochMs)), 'dd.MM.yyyy - HH:mm:ss');
+};
+
+// ####################################
+//     DATABASE & SERVER CONNECTION
+// ####################################
 const db = mysql.createPool({
   host: process.env.DB_HOST,
   user: process.env.DB_USER,
@@ -33,8 +47,8 @@ const db_nekoha = mysql.createPool({
 
   waitForConnections: true,
   connectionLimit: 1000,
-  maxIdle: 1000, // max idle connections, the default value is the same as `connectionLimit`
-  idleTimeout: 60000, // idle connections timeout, in milliseconds, the default value 60000
+  maxIdle: 1000,
+  idleTimeout: 60000,
   queueLimit: 0,
   enableKeepAlive: true,
   keepAliveInitialDelay: 0,
@@ -47,94 +61,26 @@ db.getConnection((err, connection) => {
     return;
   }
   console.log('Connected to MySQL (Connection Pool)');
-  connection.release(); // Always release the connection back to the pool
+  connection.release();
 });
 
-// ###########################
-//        WEB SOCKECT
-// ###########################
-
-// SETUP EXPRESS SERVER AND WEBSOCKETS
+// Server Connection
 const app = express();
 const port = 5000;
 const server = http.createServer(app);
-const io = require('socket.io')(server, {
-  path: '/api/live/'
-});
 
 // CORS middleware for cross-origin requests
 app.use(cors());
- 
-//////////////////////
-// >> /api/live/osu //
-//////////////////////
-
-// Connection Var
-let activeConnections = 0;
-const osuNamespace = io.of("/osu");
-
-// Connection Listener
-osuNamespace.on("connection", (socket) => {
-  activeConnections++; // Increase count when a client connects
-  // console.log(`Client connected. Active connections: ${activeConnections}`);
-  osuNamespace.emit("update-connection-count", activeConnections); // Send update to all clients
-
-  // Disconnect
-  socket.on("disconnect", () => {
-    activeConnections--; // Decrease count when a client disconnects
-    // console.log(`Client disconnected. Active connections: ${activeConnections}`);
-    osuNamespace.emit("update-connection-count", activeConnections); // Send update to all clients
-  });
-});
-
-// WebSocket helper function to send updates to clients
-const notifyOsuClients = (newEntry) => {
-  osuNamespace.emit("new-entry", newEntry);
-};
-
-///////////////////////
-// >> /api/live/chat //
-///////////////////////
-const chatNamespace = io.of("/chat");
-
-let activeChatUsers = 0;
-
-chatNamespace.on("connection", (socket) => {
-  activeChatUsers++;
-  // console.log(`Chat client connected. Active users: ${activeChatUsers}`);
-  chatNamespace.emit("update-chat-users", activeChatUsers);
-
-  socket.on("disconnect", () => {
-    activeChatUsers--;
-    // console.log(`Chat client disconnected. Active users: ${activeChatUsers}`);
-    chatNamespace.emit("update-chat-users", activeChatUsers);
-  });
-});
-
-// Function to send new messages via WebSocket
-const notifyChatClients = (newMessage) => {
-  chatNamespace.emit("new-chat-message", newMessage);
-};
 
 // ###########################
 //       API Endpoints
 // ###########################
 
 app.get('/api/log', (req, res) => {
-
-  // Sanitize channel input by allowing only specific values
-  const allowedChannels = [
-    'announce', 'arabic', 'balkan', 'bulgarian', 'cantonese', 'chinese', 'ctb', 'czechoslovak',
-    'dutch', 'english', 'estonian', 'filipino', 'finnish', 'french', 'german', 'greek', 'hebrew',
-    'help', 'hungarian', 'indonesian', 'italian', 'japanese', 'korean', 'latvian', 'lazer',
-    'lobby', 'malaysian', 'mapping', 'modreqs', 'osu', 'osumania', 'polish', 'portuguese',
-    'romanian', 'russian', 'skandinavian', 'spanish', 'taiko', 'taiwanese', 'thai', 'turkish',
-    'ukrainian', 'uzbek', 'videogames', 'vietnamese', 'all'
-  ];
   
   let channel = req.query.channel ? req.query.channel : 'osu'; // Default to 'osu'
 
-  if (!allowedChannels.includes(channel)) {
+  if (!allowedChannels.includes(channel) && !(channel == "all")) {
     return res.status(400).send('Invalid channel');
   }
 
@@ -297,6 +243,74 @@ app.get('/api/log/export', (req, res) => {
           console.error('Error deleting backup file:', unlinkErr);
         }
       });
+    });
+  });
+});
+
+
+// Function to format each row with fixed column widths
+const formatRow = (timestamp, user_id, username, message) => {
+  return `${timestamp.padEnd(22)} ${user_id.toString().padEnd(10)} ${username.padEnd(16)} ${message}`;
+};
+
+// API to export a single table as CSV
+app.get('/api/log/download', (req, res) => {
+  let channel = req.query.channel ? req.query.channel : 'osu'; // Default to 'osu'
+
+  if (!allowedChannels.includes(channel)) {
+    return res.status(400).send('Invalid channel');
+  }
+
+  const fileName = `chat_log_${channel}_${Date.now()}.txt`;
+  const filePath = path.join(__dirname, 'backups', fileName);
+
+  // Ensure the backups directory exists
+  if (!fs.existsSync(path.dirname(filePath))) {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  }
+
+  const writeStream = fs.createWriteStream(filePath);
+
+  db.query(`SELECT timestamp, user_id, username, message FROM ${channel}`, (err, rows, fields) => {
+    if (err) {
+      console.error(`Error exporting table ${channel}:`, err);
+      return res.status(500).json({ error: `Failed to export table: ${channel}` });
+    }
+
+    if (rows.length > 0) {
+      writeStream.write(formatRow("timestamp", "user_id", "username", "message") + '\n');
+    }
+
+    rows.forEach(row => {
+      writeStream.write(formatRow(
+        formatTimestamp(row.timestamp),
+        row.user_id,
+        row.username,
+        row.message
+      ) + '\n');
+    });
+
+    writeStream.end();
+
+    writeStream.on('finish', () => {
+      res.download(filePath, fileName, (err) => {
+        if (err) {
+          console.error('Error sending file:', err);
+          return res.status(500).json({ error: 'Failed to send TXT file' });
+        }
+
+        // Delete file after download
+        fs.unlink(filePath, (unlinkErr) => {
+          if (unlinkErr) {
+            console.error('Error deleting TXT file:', unlinkErr);
+          }
+        });
+      });
+    });
+
+    writeStream.on('error', (err) => {
+      console.error('Error writing TXT file:', err);
+      return res.status(500).json({ error: 'Failed to write TXT file' });
     });
   });
 });
