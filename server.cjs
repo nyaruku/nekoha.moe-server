@@ -5,7 +5,11 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { format } = require('date-fns');
+const os = require('os');
+const YTDlpWrap = require('yt-dlp-wrap').default;
+const ytDlp = new YTDlpWrap();
 require('dotenv').config({ path: 'secret.env' });
+const { exec } = require('child_process');
 
 const allowedChannels = [
   'announce', 'arabic', 'balkan', 'bulgarian', 'cantonese', 'chinese', 'ctb', 'czechoslovak',
@@ -170,7 +174,6 @@ app.get('/api/log', (req, res) => {
   });
 });
 
-const { exec } = require('child_process');
 app.get('/api/log/stats', (req, res) => {
   const query = `
     SELECT table_name AS tableName,
@@ -254,7 +257,7 @@ const formatRow = (timestamp, user_id, username, message) => {
 };
 
 // API to export a single table as CSV
-app.get('/api/log/download', (req, res) => {
+app.get('/api/log/download', async (req, res) => {
   let channel = req.query.channel ? req.query.channel : 'osu'; // Default to 'osu'
 
   if (!allowedChannels.includes(channel)) {
@@ -315,9 +318,14 @@ app.get('/api/log/download', (req, res) => {
   });
 });
 
+// page counter
+app.get('/api/count', async(req, res) => {
+
+
+});
 
 // Fetch Chat Messages
-app.get('/api/chat', (req, res) => {
+app.get('/api/chat', async(req, res) => {
   db_nekoha.query("SELECT * FROM chat ORDER BY id DESC LIMIT 50", (err, results) => {
     if (err) {
       console.error('Error fetching messages:', err);
@@ -328,7 +336,7 @@ app.get('/api/chat', (req, res) => {
 });
 
 // Store New Chat Message
-app.post('/api/chat', (req, res) => {
+app.post('/api/chat', async(req, res) => {
   const unixTimeInSeconds = Math.floor(Date.now());
   const { username, message } = req.body;
   if (!username || !message) return res.status(400).send("Invalid data");
@@ -346,6 +354,147 @@ app.post('/api/chat', (req, res) => {
     res.status(201).json(newMessage);
   });
 });
+
+// ###########################
+//           YTDL
+// ###########################
+
+function bytesToMebibytes(bytes) {
+  return (bytes / (1024 * 1024)).toFixed(2) + "MiB";
+}
+
+app.get("/api/ytdlp/info", async(req, res) => {
+  let url = req.query.url ? req.query.url : '';
+
+  try {
+    const cookiesPath = path.join(os.homedir(), 'yt-cookies'); // Resolves ~/yt-cookies correctly
+    const info = await ytDlp.execPromise([
+        url,
+        "--cookies", cookiesPath,
+        "--dump-json" // Fetch metadata only, do not download
+    ]);
+
+    const videoInfo = JSON.parse(info);
+
+    // Filter out storyboard formats and extract relevant video formats
+    const videoFormats = videoInfo.formats
+      .filter(f => !f.format_note.includes("storyboard") && f.acodec === "none")
+      .map(f => [
+        f.format_id,
+        `${f.resolution}@${f.fps}FPS (${f.ext}) (${bytesToMebibytes(f.filesize_approx)} MiB)`
+      ]);
+
+    // Filter out storyboard formats and extract relevant audio formats
+    const audioFormats = videoInfo.formats
+      .filter(f => !f.format_note.includes("storyboard") && f.vcodec === "none")
+      .map(f => [
+        f.format_id,
+        `${f.acodec} (${f.ext}) (${bytesToMebibytes(f.filesize_approx)} MiB)`
+      ]);
+
+    res.json({
+      videoInfo: {
+        id: videoInfo.id,
+        title: videoInfo.title,
+        duration: videoInfo.duration,
+        uploader: videoInfo.uploader,
+        thumbnail: videoInfo.thumbnail,
+        webpage_url: videoInfo.webpage_url
+      },
+      videoFormats: videoFormats,
+      audioFormats: audioFormats
+    });
+  } catch (error) {
+      res.status(500).send("Error fetching video info: " + error);
+      return;
+  }
+});
+
+app.get("/api/ytdlp/download", async (req, res) => {
+  let url = req.query.url || "";
+  let video_format_id = parseInt(req.query.video, 10);
+  let audio_format_id = parseInt(req.query.audio, 10);
+
+  if (!url) {
+    return res.status(400).json({ error: "Missing video URL" });
+  }
+
+  try {
+    const outputDir = path.join(os.tmpdir(), "ytdlp_downloads");
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
+    
+    const cookiesPath = path.join(os.homedir(), "yt-cookies");
+    let metadataCommand = `yt-dlp --cookies "${cookiesPath}" --dump-json "${url}"`;
+    console.log("Fetching metadata with:", metadataCommand);
+
+    exec(metadataCommand, (metaError, metaStdout, metaStderr) => {
+      if (metaError) {
+        console.error("Metadata fetch error:", metaStderr);
+        return res.status(500).json({ error: "Failed to fetch metadata", details: metaStderr });
+      }
+
+      let videoInfo;
+      try {
+        videoInfo = JSON.parse(metaStdout);
+      } catch (parseError) {
+        console.error("Error parsing metadata:", parseError);
+        return res.status(500).json({ error: "Error parsing metadata" });
+      }
+      
+      const sanitizedTitle = videoInfo.title.replace(/[^a-zA-Z0-9-_\.]/g, "_");
+      const outputFilePath = path.join(outputDir, `${sanitizedTitle}.%(ext)s`);
+      let command = `yt-dlp -o "${outputFilePath}" --cookies "${cookiesPath}"`;
+
+      if (video_format_id === 0 && audio_format_id === 0) {
+        command += " -f bestvideo+bestaudio --merge-output-format mkv";
+      } else if (video_format_id && audio_format_id) {
+        command += ` -f ${video_format_id}+${audio_format_id}`;
+      } else if (video_format_id) {
+        command += ` -f ${video_format_id}`;
+      } else if (audio_format_id) {
+        command += ` -f ${audio_format_id}`;
+      }
+
+      command += ` ${url}`;
+      console.log("Executing download command:", command);
+
+      exec(command, (error, stdout, stderr) => {
+        console.log("yt-dlp output:", stdout);
+        console.log("yt-dlp error:", stderr);
+
+        if (error) {
+          return res.status(500).json({ error: "Download failed", details: stderr });
+        }
+
+        const downloadedFile = fs.readdirSync(outputDir).find(file => file.startsWith(sanitizedTitle));
+        if (!downloadedFile) {
+          console.error("File not found after download");
+          return res.status(500).json({ error: "File not found after download" });
+        }
+
+        const filePath = path.join(outputDir, downloadedFile);
+        console.log("Serving file:", filePath);
+        res.download(filePath, downloadedFile, (err) => {
+          if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+          } else {
+              console.log(`File not found: ${filePath}`);
+          }
+          if (err) {
+            console.error("File download error:", err);
+            res.status(500).json({ error: "File download error" });
+          }
+        });
+      });
+    });
+  } catch (error) {
+    console.error("Server error:", error);
+    res.status(500).json({ error: "Server error", details: error.message });
+  }
+});
+
 
 // ###########################
 //           START
