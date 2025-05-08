@@ -250,7 +250,6 @@ app.get('/api/log/export', (req, res) => {
   });
 });
 
-
 // Function to format each row with fixed column widths
 const formatRow = (timestamp, user_id, username, message) => {
   return `${timestamp.padEnd(22)} ${user_id.toString().padEnd(10)} ${username.padEnd(16)} ${message}`;
@@ -321,39 +320,8 @@ app.get('/api/log/download', async (req, res) => {
 // page counter
 app.get('/api/count', async(req, res) => {
 
-
 });
 
-// Fetch Chat Messages
-app.get('/api/chat', async(req, res) => {
-  db_nekoha.query("SELECT * FROM chat ORDER BY id DESC LIMIT 50", (err, results) => {
-    if (err) {
-      console.error('Error fetching messages:', err);
-      return res.status(500).send('Error fetching messages');
-    }
-    res.json(results);
-  });
-});
-
-// Store New Chat Message
-app.post('/api/chat', async(req, res) => {
-  const unixTimeInSeconds = Math.floor(Date.now());
-  const { username, message } = req.body;
-  if (!username || !message) return res.status(400).send("Invalid data");
-
-  const query = "INSERT INTO chat (timestamp, username, message) VALUES (?, ?)";
-  db_nekoha.query(query, [unixTimeInSeconds, username, message], (err, result) => {
-    if (err) {
-      console.error("Database error:", err);
-      return res.status(500).send("Database error");
-    }
-
-    const newMessage = { id: result.insertId, username, message };
-    notifyChatClients(newMessage); // Send to WebSocket clients
-
-    res.status(201).json(newMessage);
-  });
-});
 
 // ###########################
 //           YTDL
@@ -495,7 +463,112 @@ app.get("/api/ytdlp/download", async (req, res) => {
   }
 });
 
+// #####################
+//     CHAT WEBSITE
+// #####################
 
+
+// Fetch last 24h Chat Messages
+app.get('/api/chat', (req, res) => {
+  const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+  //const query = 'SELECT * FROM chat WHERE timestamp >= ? ORDER BY id ASC';
+  //const query = 'SELECT * FROM chat ORDER BY id DESC';
+  const query = `
+  SELECT id, timestamp, username, message, color, discord
+  FROM chat
+  WHERE timestamp >= ?
+  ORDER BY id DESC`;
+
+  db_nekoha.query(query, [oneDayAgo], (err, results) => {
+    if (err) {
+      console.error('Error fetching messages:', err);
+      return res.status(500).send('Error fetching messages');
+    }
+    res.json(results);
+  });
+});
+
+// Add middleware to parse JSON bodies
+app.use(express.json()); // This is required for parsing JSON data
+
+// Store New Chat Message
+app.post('/api/chat', (req, res) => {
+  const unixTimeMs = Date.now();
+
+  let { username, message, color, discord } = req.body;
+
+  if (typeof message !== 'string' || message.trim() === '') {
+    return res.status(400).send('Message is required');
+  }
+
+  message = message.trim().slice(0, 2000);
+  username = typeof username === 'string' ? username.trim().slice(0, 20) : null;
+  color = typeof color === 'string' && /^#[0-9A-Fa-f]{6}$/.test(color)
+    ? color
+    : '#FFFFFF';
+  discord = discord === 1 ? 1 : 0; // Only allow 1 or 0
+
+  if (username === '') {
+    username = null;
+  }
+
+  const query = `
+    INSERT INTO chat (timestamp, username, message, color, discord)
+    VALUES (?, ?, ?, ?, ?)
+  `;
+  const values = [unixTimeMs, username, message, color, discord];
+
+  db_nekoha.query(query, values, (err, result) => {
+    if (err) {
+      console.error('Database error:', err);
+      return res.status(500).send('Database error');
+    }
+
+    const newMessage = {
+      id: result.insertId,
+      timestamp: unixTimeMs,
+      username: username || 'anonymous',
+      message,
+      color,
+      discord
+    };
+
+    notifyChatClients(newMessage);
+
+    res.status(201).json(newMessage);
+  });
+});
+
+const io = require('socket.io')(server, {
+  path: '/api/live/'
+});
+
+// Create a namespace for chat
+const chatNamespace = io.of("/web-chat");
+
+chatNamespace.on('connection', (socket) => {
+  console.log('New WebSocket client connected');
+
+  // Listen for a 'disconnect' event
+  socket.on('disconnect', () => {
+    console.log('WebSocket client disconnected');
+  });
+
+  // Listen for errors
+  socket.on('error', (err) => {
+    console.error('WebSocket error:', err);
+  });
+
+  // You can also listen for custom events sent from the client if needed
+  // Example: socket.on('message', (message) => { ... });
+
+});
+
+// Function to broadcast to all clients in the chat namespace
+function notifyChatClients(messageObject) {
+  // Emit the 'new_message' event to all connected clients in the chat namespace
+  chatNamespace.emit('new_message', messageObject);  // This will broadcast to all clients connected to /web-chat
+}
 // ###########################
 //           START
 // ###########################
