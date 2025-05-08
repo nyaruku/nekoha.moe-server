@@ -10,6 +10,8 @@ const YTDlpWrap = require('yt-dlp-wrap').default;
 const ytDlp = new YTDlpWrap();
 require('dotenv').config({ path: 'secret.env' });
 const { exec } = require('child_process');
+const leoProfanity = require('leo-profanity');
+leoProfanity.loadDictionary(); // optional, default is English
 
 const allowedChannels = [
   'announce', 'arabic', 'balkan', 'bulgarian', 'cantonese', 'chinese', 'ctb', 'czechoslovak',
@@ -502,6 +504,7 @@ app.post('/api/chat', (req, res) => {
   }
 
   message = message.trim().slice(0, 2000);
+  message = leoProfanity.clean(message);
   username = typeof username === 'string' ? username.trim().slice(0, 20) : null;
   color = typeof color === 'string' && /^#[0-9A-Fa-f]{6}$/.test(color)
     ? color
