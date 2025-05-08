@@ -559,6 +559,10 @@ chatNamespace.on('connection', (socket) => {
     console.error('WebSocket error:', err);
   });
 
+  socket.on('new_message', (message) => {
+    // Re-broadcast to all clients except sender
+    socket.broadcast.emit('new_message', message);
+  });
   // You can also listen for custom events sent from the client if needed
   // Example: socket.on('message', (message) => { ... });
 
