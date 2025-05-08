@@ -469,6 +469,7 @@ app.get("/api/ytdlp/download", async (req, res) => {
 //     CHAT WEBSITE
 // #####################
 
+let onlineCount = 0;
 
 // Fetch last 24h Chat Messages
 app.get('/api/chat', (req, res) => {
@@ -549,12 +550,23 @@ const io = require('socket.io')(server, {
 // Create a namespace for chat
 const chatNamespace = io.of("/web-chat");
 
+// Keep track of the uptime
+setInterval(() => {
+  const uptime = getUptime();
+  chatNamespace.emit('uptime', uptime); // Emit the uptime data to all clients
+}, 1000);
+
 chatNamespace.on('connection', (socket) => {
+  onlineCount++;
   console.log('New WebSocket client connected');
+  // Broadcast the new count to all clients
+  chatNamespace.emit('user_count', onlineCount);
 
   // Listen for a 'disconnect' event
   socket.on('disconnect', () => {
+    onlineCount--;
     console.log('WebSocket client disconnected');
+    chatNamespace.emit('user_count', onlineCount);
   });
 
   // Listen for errors
@@ -576,6 +588,30 @@ function notifyChatClients(messageObject) {
   // Emit the 'new_message' event to all connected clients in the chat namespace
   chatNamespace.emit('new_message', messageObject);  // This will broadcast to all clients connected to /web-chat
 }
+
+// ###########################
+//           UPTIME
+// ###########################
+
+// Capture the start time when the server is initialized
+const serverStartTime = Date.now();
+
+// Function to calculate and format uptime
+function getUptime() {
+  const uptimeInMilliseconds = Date.now() - serverStartTime;
+  const uptimeInSeconds = Math.floor(uptimeInMilliseconds / 1000);
+  return formatUptime(uptimeInSeconds);
+}
+
+function formatUptime(seconds) {
+  const days = Math.floor(seconds / (24 * 3600));
+  const hours = Math.floor((seconds % (24 * 3600)) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainingSeconds = seconds % 60;
+
+  return `${days}d ${hours}h ${minutes}m ${remainingSeconds}s`;
+}
+
 // ###########################
 //           START
 // ###########################
