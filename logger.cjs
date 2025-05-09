@@ -50,6 +50,24 @@ const client = new BanchoClient({
   apiKey,
 });
 
+let lastMessageTimestamp = Date.now();
+
+function resetWatchdog() {
+  lastMessageTimestamp = Date.now();
+}
+
+setInterval(() => {
+  const now = Date.now();
+  if (now - lastMessageTimestamp > 60000) { // no message for 60 seconds
+    console.warn("No IRC messages received for 60 seconds, reconnecting...");
+    client.disconnect().then(() => {
+      client.connect().catch(err => {
+        console.error("Reconnect failed:", err);
+      });
+    });
+  }
+}, 30000);
+
 // Bancho Client Logic - Listening to messages
 (async () => {
   try {
@@ -75,6 +93,7 @@ const client = new BanchoClient({
       console.log(`Joined ${channelName} channel!`);
 
       channel.on("message", async (message) => {
+        resetWatchdog();
         const unixTimeInSeconds = Math.floor(Date.now());
         const originalMessage = message.message;
         message.message = message.message.replace(/@/g, " "); // Clean message
@@ -98,7 +117,8 @@ const client = new BanchoClient({
     }
 
     client.on("disconnect", () => {
-      console.log("Disconnected from Bancho!");
+      console.log("Disconnected from Bancho, attempting to reconnect...");
+      client.connect().catch(err => console.error("Reconnection failed:", err));
     });
   } catch (error) {
     console.error("An error occurred:", error);
