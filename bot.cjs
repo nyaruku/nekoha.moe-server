@@ -87,6 +87,9 @@ const socket = io('http://localhost:5000/web-chat', {
   path: '/api/live/',
   transports: ['websocket'],
   reconnection: true,
+  auth: {
+    token: process.env.BOT_SOCKET_SECRET,
+  },
 });
 
 socket.on('connect', () => {

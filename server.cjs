@@ -494,8 +494,16 @@ app.get('/api/chat', (req, res) => {
 // Add middleware to parse JSON bodies
 app.use(express.json()); // This is required for parsing JSON data
 
+const rateLimit = require('express-rate-limit');
+
+const chatLimiter = rateLimit({
+  windowMs: 3000, // 3 seconds
+  max: 6, // limit each IP to x requests per windowMs
+  message: 'Too many messages sent, please slow down.'
+});
+
 // Store New Chat Message
-app.post('/api/chat', (req, res) => {
+app.post('/api/chat', chatLimiter, (req, res) => {
   const unixTimeMs = Date.now();
 
   let { username, message, color, discord } = req.body;
@@ -543,6 +551,8 @@ app.post('/api/chat', (req, res) => {
   });
 });
 
+app.set('trust proxy', 1);
+
 const io = require('socket.io')(server, {
   path: '/api/live/'
 });
@@ -550,13 +560,36 @@ const io = require('socket.io')(server, {
 // Create a namespace for chat
 const chatNamespace = io.of("/web-chat");
 
+const ipConnections = {};
+const MAX_CONNECTIONS_PER_IP = 3;
+
 // Keep track of the uptime
 setInterval(() => {
   const uptime = getUptime();
   chatNamespace.emit('uptime', uptime); // Emit the uptime data to all clients
 }, 1000);
 
+const messageTimestamps = new Map();
+
 chatNamespace.on('connection', (socket) => {
+
+  const token = socket.handshake.auth?.token;
+  const isBot = token === process.env.BOT_SOCKET_SECRET;
+
+  const forwarded = socket.handshake.headers['x-forwarded-for'];
+  const ip = forwarded ? forwarded.split(',')[0].trim() : socket.handshake.address;
+  
+  if (!isBot) {
+    ipConnections[ip] = (ipConnections[ip] || 0) + 1;
+
+    if (ipConnections[ip] > MAX_CONNECTIONS_PER_IP) {
+      console.log(`Too many connections from ${ip}. Disconnecting socket.`);
+      socket.disconnect(true);
+      ipConnections[ip]--;
+      return;
+    }
+  }
+
   onlineCount++;
   console.log('New WebSocket client connected');
   // Broadcast the new count to all clients
@@ -565,8 +598,12 @@ chatNamespace.on('connection', (socket) => {
   // Listen for a 'disconnect' event
   socket.on('disconnect', () => {
     onlineCount--;
-    console.log('WebSocket client disconnected');
     chatNamespace.emit('user_count', onlineCount);
+    if (!isBot) {
+      messageTimestamps.delete(socket.id);
+      ipConnections[ip] = Math.max((ipConnections[ip] || 1) - 1, 0);
+      if (ipConnections[ip] === 0) delete ipConnections[ip];
+    }
   });
 
   // Listen for errors
@@ -574,8 +611,24 @@ chatNamespace.on('connection', (socket) => {
     console.error('WebSocket error:', err);
   });
 
+  const MESSAGE_LIMIT = 2;
+  const TIME_WINDOW = 3000; // 3 seconds
+
   socket.on('new_message', (message) => {
-    // Re-broadcast to all clients except sender
+    if (!isBot) {
+      const now = Date.now();
+      const timestamps = messageTimestamps.get(socket.id) || [];
+      const recent = timestamps.filter(ts => now - ts < TIME_WINDOW);
+      recent.push(now);
+      messageTimestamps.set(socket.id, recent);
+
+      if (recent.length > MESSAGE_LIMIT) {
+        console.log(`Rate limit exceeded by ${ip}. Disconnecting socket.`);
+        socket.disconnect(true);
+        return;
+      }
+    }
+
     socket.broadcast.emit('new_message', message);
   });
   // You can also listen for custom events sent from the client if needed
@@ -588,6 +641,18 @@ function notifyChatClients(messageObject) {
   // Emit the 'new_message' event to all connected clients in the chat namespace
   chatNamespace.emit('new_message', messageObject);  // This will broadcast to all clients connected to /web-chat
 }
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, timestamps] of messageTimestamps.entries()) {
+    const recent = timestamps.filter(ts => now - ts < TIME_WINDOW);
+    if (recent.length === 0) {
+      messageTimestamps.delete(id);
+    } else {
+      messageTimestamps.set(id, recent);
+    }
+  }
+}, 5000);
 
 // ###########################
 //           UPTIME
