@@ -11,6 +11,7 @@ const ytDlp = new YTDlpWrap();
 require('dotenv').config({ path: 'secret.env' });
 const { exec } = require('child_process');
 const leoProfanity = require('leo-profanity');
+const rateLimit = require('express-rate-limit');
 leoProfanity.loadDictionary(); // optional, default is English
 
 const allowedChannels = [
@@ -494,7 +495,6 @@ app.get('/api/chat', (req, res) => {
 // Add middleware to parse JSON bodies
 app.use(express.json()); // This is required for parsing JSON data
 
-const rateLimit = require('express-rate-limit');
 
 const chatLimiter = rateLimit({
   windowMs: 3000, // 3 seconds
@@ -503,7 +503,8 @@ const chatLimiter = rateLimit({
 });
 
 // Store New Chat Message
-app.post('/api/chat', chatLimiter, (req, res) => {
+app.post('/api/chat', ipConnectionGuard, chatLimiter, (req, res) => {
+  const ipaddr = req.ip;
   const unixTimeMs = Date.now();
 
   let { username, message, color, discord } = req.body;
@@ -525,10 +526,10 @@ app.post('/api/chat', chatLimiter, (req, res) => {
   }
 
   const query = `
-    INSERT INTO chat (timestamp, username, message, color, discord)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO chat (timestamp, username, message, color, discord, ip)
+    VALUES (?, ?, ?, ?, ?, ?)
   `;
-  const values = [unixTimeMs, username, message, color, discord];
+  const values = [unixTimeMs, username, message, color, discord, ipaddr];
 
   db_nekoha.query(query, values, (err, result) => {
     if (err) {
@@ -551,7 +552,18 @@ app.post('/api/chat', chatLimiter, (req, res) => {
   });
 });
 
-app.set('trust proxy', 1);
+function ipConnectionGuard(req, res, next) {
+  const ip = req.ip;
+
+  if (ipConnections[ip] > MAX_CONNECTIONS_PER_IP) {
+    console.log(`Blocked POST /api/chat from ${ip} due to too many connections.`);
+    return res.status(429).json({ error: 'Too many active connections from your IP. Try again later.' });
+  }
+
+  next();
+}
+
+app.set('trust proxy', true);
 
 const io = require('socket.io')(server, {
   path: '/api/live/'
