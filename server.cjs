@@ -320,151 +320,26 @@ app.get('/api/log/download', async (req, res) => {
   });
 });
 
-// page counter
-app.get('/api/count', async(req, res) => {
-
+// GET + increment visit counter
+app.get('/api/visit', (req, res) => {
+  const query = 'UPDATE data SET counter = counter + 1';
+  db_nekoha.query(query, (err) => {
+    if (err) return res.status(500).send('Database error');
+    
+    db_nekoha.query('SELECT counter FROM data', (err, results) => {
+      if (err) return res.status(500).send('Read error');
+      res.json({ count: results[0].counter });
+    });
+  });
 });
+
 
 
 // ###########################
 //           YTDL
 // ###########################
 
-function bytesToMebibytes(bytes) {
-  return (bytes / (1024 * 1024)).toFixed(2) + "MiB";
-}
-
-app.get("/api/ytdlp/info", async(req, res) => {
-  let url = req.query.url ? req.query.url : '';
-
-  try {
-    const cookiesPath = path.join(os.homedir(), 'yt-cookies'); // Resolves ~/yt-cookies correctly
-    const info = await ytDlp.execPromise([
-        url,
-        "--cookies", cookiesPath,
-        "--dump-json" // Fetch metadata only, do not download
-    ]);
-
-    const videoInfo = JSON.parse(info);
-
-    // Filter out storyboard formats and extract relevant video formats
-    const videoFormats = videoInfo.formats
-      .filter(f => !f.format_note.includes("storyboard") && f.acodec === "none")
-      .map(f => [
-        f.format_id,
-        `${f.resolution}@${f.fps}FPS (${f.ext}) (${bytesToMebibytes(f.filesize_approx)} MiB)`
-      ]);
-
-    // Filter out storyboard formats and extract relevant audio formats
-    const audioFormats = videoInfo.formats
-      .filter(f => !f.format_note.includes("storyboard") && f.vcodec === "none")
-      .map(f => [
-        f.format_id,
-        `${f.acodec} (${f.ext}) (${bytesToMebibytes(f.filesize_approx)} MiB)`
-      ]);
-
-    res.json({
-      videoInfo: {
-        id: videoInfo.id,
-        title: videoInfo.title,
-        duration: videoInfo.duration,
-        uploader: videoInfo.uploader,
-        thumbnail: videoInfo.thumbnail,
-        webpage_url: videoInfo.webpage_url
-      },
-      videoFormats: videoFormats,
-      audioFormats: audioFormats
-    });
-  } catch (error) {
-      res.status(500).send("Error fetching video info: " + error);
-      return;
-  }
-});
-
-app.get("/api/ytdlp/download", async (req, res) => {
-  let url = req.query.url || "";
-  let video_format_id = parseInt(req.query.video, 10);
-  let audio_format_id = parseInt(req.query.audio, 10);
-
-  if (!url) {
-    return res.status(400).json({ error: "Missing video URL" });
-  }
-
-  try {
-    const outputDir = path.join(os.tmpdir(), "ytdlp_downloads");
-    if (!fs.existsSync(outputDir)) {
-      fs.mkdirSync(outputDir, { recursive: true });
-    }
-    
-    const cookiesPath = path.join(os.homedir(), "yt-cookies");
-    let metadataCommand = `yt-dlp --cookies "${cookiesPath}" --dump-json "${url}"`;
-    console.log("Fetching metadata with:", metadataCommand);
-
-    exec(metadataCommand, (metaError, metaStdout, metaStderr) => {
-      if (metaError) {
-        console.error("Metadata fetch error:", metaStderr);
-        return res.status(500).json({ error: "Failed to fetch metadata", details: metaStderr });
-      }
-
-      let videoInfo;
-      try {
-        videoInfo = JSON.parse(metaStdout);
-      } catch (parseError) {
-        console.error("Error parsing metadata:", parseError);
-        return res.status(500).json({ error: "Error parsing metadata" });
-      }
-      
-      const sanitizedTitle = videoInfo.title.replace(/[^a-zA-Z0-9-_\.]/g, "_");
-      const outputFilePath = path.join(outputDir, `${sanitizedTitle}.%(ext)s`);
-      let command = `yt-dlp -o "${outputFilePath}" --cookies "${cookiesPath}"`;
-
-      if (video_format_id === 0 && audio_format_id === 0) {
-        command += " -f bestvideo+bestaudio --merge-output-format mkv";
-      } else if (video_format_id && audio_format_id) {
-        command += ` -f ${video_format_id}+${audio_format_id}`;
-      } else if (video_format_id) {
-        command += ` -f ${video_format_id}`;
-      } else if (audio_format_id) {
-        command += ` -f ${audio_format_id}`;
-      }
-
-      command += ` ${url}`;
-      console.log("Executing download command:", command);
-
-      exec(command, (error, stdout, stderr) => {
-        console.log("yt-dlp output:", stdout);
-        console.log("yt-dlp error:", stderr);
-
-        if (error) {
-          return res.status(500).json({ error: "Download failed", details: stderr });
-        }
-
-        const downloadedFile = fs.readdirSync(outputDir).find(file => file.startsWith(sanitizedTitle));
-        if (!downloadedFile) {
-          console.error("File not found after download");
-          return res.status(500).json({ error: "File not found after download" });
-        }
-
-        const filePath = path.join(outputDir, downloadedFile);
-        console.log("Serving file:", filePath);
-        res.download(filePath, downloadedFile, (err) => {
-          if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
-          } else {
-              console.log(`File not found: ${filePath}`);
-          }
-          if (err) {
-            console.error("File download error:", err);
-            res.status(500).json({ error: "File download error" });
-          }
-        });
-      });
-    });
-  } catch (error) {
-    console.error("Server error:", error);
-    res.status(500).json({ error: "Server error", details: error.message });
-  }
-});
+// removed
 
 // #####################
 //     CHAT WEBSITE
@@ -643,6 +518,7 @@ chatNamespace.on('connection', (socket) => {
 
     socket.broadcast.emit('new_message', message);
   });
+  
   // You can also listen for custom events sent from the client if needed
   // Example: socket.on('message', (message) => { ... });
 
@@ -690,10 +566,84 @@ function formatUptime(seconds) {
 }
 
 // ###########################
+//        CURSOR SYNC
+// ###########################
+
+const app_cursor = express();
+const port_cursor = 5002;
+const server_cursor = http.createServer(app_cursor);
+
+// CORS middleware for cross-origin requests
+app_cursor.use(cors());
+app_cursor.set('trust proxy', true);
+
+
+const io_cursor = require('socket.io')(server_cursor, {
+  path: '/api/live/cursor-ws/'
+});
+
+const cursorNamespace = io_cursor.of('/cursor-sync');
+
+const MAX_CONNECTIONS_PER_IP_CURSOR = 3;
+const ipConnectionsCursor = {};
+const activeCursors = {};  // { socket.id: { x, y } }
+
+cursorNamespace.on('connection', (socket) => {
+  const forwarded = socket.handshake.headers['x-forwarded-for'];
+  const ip = forwarded ? forwarded.split(',')[0].trim() : socket.handshake.address;
+
+  ipConnectionsCursor[ip] = (ipConnectionsCursor[ip] || 0) + 1;
+
+  if (ipConnectionsCursor[ip] > MAX_CONNECTIONS_PER_IP_CURSOR) {
+    console.log(`Too many cursor connections from ${ip}. Disconnecting socket.`);
+    socket.disconnect(true);
+    ipConnectionsCursor[ip]--;
+    return;
+  }
+
+  console.log(`Cursor client connected: ${socket.id} from ${ip}`);
+
+  // Store last send timestamp for throttling
+  let lastSent = 0;
+
+  socket.on('cursor_position', (data) => {
+    const now = Date.now();
+    if (now - lastSent >= 20) {
+      lastSent = now;
+      activeCursors[socket.id] = { ...data };
+      socket.broadcast.emit('cursor_position', {
+        id: socket.id,
+        ...data
+      });
+    }
+  });
+
+  socket.on('disconnect', () => {
+    console.log(`Cursor client disconnected: ${socket.id}`);
+    delete activeCursors[socket.id];
+
+    // Notify others to remove this cursor
+    socket.broadcast.emit('cursor_disconnect', {
+      id: socket.id
+    });
+
+    ipConnectionsCursor[ip] = Math.max((ipConnectionsCursor[ip] || 1) - 1, 0);
+    if (ipConnectionsCursor[ip] === 0) delete ipConnectionsCursor[ip];
+  });
+
+  socket.on('error', (err) => {
+    console.error('WebSocket error (cursor sync):', err);
+  });
+});
+
+// ###########################
 //           START
 // ###########################
 
 // Start the server
 server.listen(port, () => {
   console.log(`Server running on http://localhost:${port}`);
+});
+server_cursor.listen(port_cursor, () => {
+  console.log(`ServerCursor running on http://localhost:${port}`);
 });

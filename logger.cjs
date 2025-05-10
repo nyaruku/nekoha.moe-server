@@ -76,7 +76,7 @@ setInterval(() => {
     console.log("Connected to Bancho!");
 
     const channelsToJoin = [
-      "#osu", "#german", "#announce", "#arabic", "#balkan", "#bulgarian", "#cantonese", "#chinese", "#ctb", "#czechoslovak",
+      "#osu", "#german", "#announce", "#arabic", "#bulgarian", "#cantonese", "#chinese", "#ctb", "#czechoslovak",
       "#dutch", "#english", "#estonian", "#filipino", "#finnish", "#french", "#greek", "#hebrew",
       "#help", "#hungarian", "#indonesian", "#italian", "#japanese", "#korean", "#latvian", "#lazer",
       "#lobby", "#malaysian", "#mapping", "#modreqs", "#osumania", "#polish", "#portuguese",
