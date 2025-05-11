@@ -389,7 +389,7 @@ app.post('/api/chat', ipConnectionGuard, chatLimiter, (req, res) => {
   }
 
   message = message.trim().slice(0, 2000);
-  message = leoProfanity.clean(message);
+  //message = leoProfanity.clean(message);
   username = typeof username === 'string' ? username.trim().slice(0, 20) : null;
   color = typeof color === 'string' && /^#[0-9A-Fa-f]{6}$/.test(color)
     ? color
