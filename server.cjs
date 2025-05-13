@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const http = require('http');
 const fs = require('fs');
+const crypto = require('node:crypto');
 const path = require('path');
 const { format } = require('date-fns');
 const os = require('os');
@@ -13,6 +14,39 @@ const { exec } = require('child_process');
 const leoProfanity = require('leo-profanity');
 const rateLimit = require('express-rate-limit');
 leoProfanity.loadDictionary(); // optional, default is English
+
+const algorithm = "aes-256"
+const secretKey = process.env.ENCRYPT_STRING
+
+const key = crypto
+  .createHash("sha512")
+  .update(secretKey)
+  .digest("hex")
+  .substring(0, 32)
+
+const iv = crypto.randomBytes(16)
+
+function encrypt(data) {
+  const cipher = crypto.createCipheriv(algorithm, Buffer.from(key), iv)
+  let encrypted = cipher.update(data, "utf-8", "hex")
+  encrypted += cipher.final("hex")
+
+  return iv.toString("hex") + encrypted
+}
+
+function decrypt(data) {
+  const inputIV = data.slice(0, 32)
+  const encrypted = data.slice(32)
+  const decipher = crypto.createDecipheriv(
+    algorithm,
+    Buffer.from(key),
+    Buffer.from(inputIV, "hex"),
+  )
+  let decrypted = decipher.update(encrypted, "hex", "utf-8")
+  decrypted += decipher.final("utf-8")
+  return decrypted
+}
+
 
 const allowedChannels = [
   'announce', 'arabic', 'balkan', 'bulgarian', 'cantonese', 'chinese', 'ctb', 'czechoslovak',
@@ -382,7 +416,8 @@ app.post('/api/chat', ipConnectionGuard, chatLimiter, (req, res) => {
   const ipaddr = req.ip;
   const unixTimeMs = Date.now();
 
-  let { username, message, color, discord } = req.body;
+  // remove discord, since bot doesnt even send through this api 
+  let { username, message, color } = req.body;
 
   if (typeof message !== 'string' || message.trim() === '') {
     return res.status(400).send('Message is required');
@@ -394,8 +429,8 @@ app.post('/api/chat', ipConnectionGuard, chatLimiter, (req, res) => {
   color = typeof color === 'string' && /^#[0-9A-Fa-f]{6}$/.test(color)
     ? color
     : '#FFFFFF';
-  discord = discord === 1 ? 1 : 0; // Only allow 1 or 0
-
+  let discord = 0;
+  
   if (username === '') {
     username = null;
   }

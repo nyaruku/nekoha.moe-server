@@ -5,6 +5,40 @@ const mysql = require('mysql2');
 const { Client, GatewayIntentBits } = require('discord.js');
 const { io } = require('socket.io-client');
 require('dotenv').config({ path: 'secret.env' });
+const crypto = require('node:crypto');
+// CRYPTO START
+const algorithm = "aes-256"
+const secretKey = process.env.ENCRYPT_STRING
+
+const key = crypto
+  .createHash("sha512")
+  .update(secretKey)
+  .digest("hex")
+  .substring(0, 32)
+
+const iv = crypto.randomBytes(16)
+
+function encrypt(data) {
+  const cipher = crypto.createCipheriv(algorithm, Buffer.from(key), iv)
+  let encrypted = cipher.update(data, "utf-8", "hex")
+  encrypted += cipher.final("hex")
+
+  return iv.toString("hex") + encrypted
+}
+
+function decrypt(data) {
+  const inputIV = data.slice(0, 32)
+  const encrypted = data.slice(32)
+  const decipher = crypto.createDecipheriv(
+    algorithm,
+    Buffer.from(key),
+    Buffer.from(inputIV, "hex"),
+  )
+  let decrypted = decipher.update(encrypted, "hex", "utf-8")
+  decrypted += decipher.final("utf-8")
+  return decrypted
+}
+// CRYPTO END
 
 // ---- MySQL setup ----
 const db = mysql.createPool({
