@@ -675,7 +675,7 @@ const io_cursor = require('socket.io')(server_cursor, {
 
 const cursorNamespace = io_cursor.of('/cursor-sync');
 
-const MAX_CONNECTIONS_PER_IP_CURSOR = 3;
+const MAX_CONNECTIONS_PER_IP_CURSOR = 2; // if user is curious
 const ipConnectionsCursor = {};
 const activeCursors = {};  // { socket.id: { x, y } }
 
