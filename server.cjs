@@ -527,6 +527,9 @@ chatNamespace.on('connection', (socket) => {
 
   const token = socket.handshake.auth?.token;
   const isBot = token === process.env.BOT_SOCKET_SECRET;
+  console.log('Received token:', token);
+  console.log(process.env.BOT_SOCKET_SECRET);
+  console.log(isBot);
 
   const forwarded = socket.handshake.headers['x-forwarded-for'];
   const ip = forwarded ? forwarded.split(',')[0].trim() : socket.handshake.address;
@@ -568,27 +571,28 @@ chatNamespace.on('connection', (socket) => {
 
   socket.on('new_message', (message) => {
     // Ensure the message is a string and not an object or any unexpected type
-    if (typeof message !== 'string') {
-      console.log(`Invalid message payload from ${ip}. Disconnecting socket.`);
-      socket.disconnect(true);
-      return;
+    if(!isBot){
+      if (typeof message !== 'string') {
+        console.log(`Invalid message payload from ${ip}. Disconnecting socket.`);
+        socket.disconnect(true);
+        return;
+      }
+
+      // Strip invisible characters (e.g., zero-width space) and sanitize message
+      message = message.replace(/[\u200B-\u200D\uFEFF]/g, ''); // Remove zero-width spaces
+      message = message.trim(); // Clean the message by trimming whitespace
+
+      if (message.length === 0) {
+        console.log(`Empty message received from ${ip}. Disconnecting socket.`);
+        socket.disconnect(true);
+        return;
+      }
+
+      // Enforce message length limit (e.g., 2000 characters)
+      if (message.length > 2000) {
+        message = message.slice(0, 2000); // Truncate if message exceeds limit
+      }
     }
-
-    // Strip invisible characters (e.g., zero-width space) and sanitize message
-    message = message.replace(/[\u200B-\u200D\uFEFF]/g, ''); // Remove zero-width spaces
-    message = message.trim(); // Clean the message by trimming whitespace
-
-    if (message.length === 0) {
-      console.log(`Empty message received from ${ip}. Disconnecting socket.`);
-      socket.disconnect(true);
-      return;
-    }
-
-    // Enforce message length limit (e.g., 2000 characters)
-    if (message.length > 2000) {
-      message = message.slice(0, 2000); // Truncate if message exceeds limit
-    }
-
     if (!isBot) {
       const now = Date.now();
       const timestamps = messageTimestamps.get(socket.id) || [];
@@ -604,7 +608,7 @@ chatNamespace.on('connection', (socket) => {
     }
 
     // Broadcast the sanitized and validated message to all other clients
-    socket.broadcast.emit('new_message', { username: socket.id, message });
+    socket.broadcast.emit('new_message',message);
   });
 
 });

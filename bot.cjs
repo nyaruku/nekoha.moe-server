@@ -111,6 +111,7 @@ discordclient.on('messageCreate', async (message) => {
       };
   
       // Emit message to website clients
+      console.log("sending message");
       socket.emit('new_message', newMessage);
     });
   }
