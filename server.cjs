@@ -413,33 +413,59 @@ const chatLimiter = rateLimit({
 
 // Store New Chat Message
 app.post('/api/chat', ipConnectionGuard, chatLimiter, (req, res) => {
-  const ipaddr = req.ip;
+
+  const errMsg = {
+    reason: "You are not connected",
+  };
+
+  if (!ipConnections[req.ip]) {
+    return res.status(403).json(errMsg);
+  }
+
   const unixTimeMs = Date.now();
 
-  // remove discord, since bot doesnt even send through this api 
+  // Clean inputs
   let { username, message, color } = req.body;
 
+  // Strip invisible characters from username and message (including zero-width spaces)
+  const stripInvisibleChars = (str) => {
+    return str.replace(/[\u200B-\u200D\uFEFF]/g, ''); // This regex removes zero-width spaces and other invisible characters
+  };
+
+  // Validate and sanitize message
   if (typeof message !== 'string' || message.trim() === '') {
     return res.status(400).send('Message is required');
   }
 
-  message = message.trim().slice(0, 2000);
-  //message = leoProfanity.clean(message);
-  username = typeof username === 'string' ? username.trim().slice(0, 20) : null;
-  color = typeof color === 'string' && /^#[0-9A-Fa-f]{6}$/.test(color)
-    ? color
-    : '#FFFFFF';
-  let discord = 0;
+  // Strip invisible characters from message
+  message = stripInvisibleChars(message.trim().slice(0, 2000));
+  // Ensure message is a string
+  if (typeof message !== 'string' || message === '') {
+    return res.status(400).send('Message is invalid');
+  }
+
+  // Strip invisible characters from username if it exists
+  username = username ? stripInvisibleChars(username.trim().slice(0, 20)) : null;
   
+  // Validate username (strip empty username)
   if (username === '') {
     username = null;
   }
 
+  // Sanitize username for XSS (replace < and > with HTML-safe characters)
+  username = username ? username.replace(/</g, '&lt;').replace(/>/g, '&gt;') : null;
+
+  // Validate color (hexadecimal color validation)
+  color = typeof color === 'string' && /^#[0-9A-Fa-f]{6}$/i.test(color) ? color : '#FFFFFF';
+
+  let discord = 0;
+
+  // Prepare the SQL query
   const query = `
     INSERT INTO chat (timestamp, username, message, color, discord, ip)
     VALUES (?, ?, ?, ?, ?, ?)
   `;
-  const values = [unixTimeMs, username, message, color, discord, ipaddr];
+  const values = [unixTimeMs, username, message, color, discord, req.ip];
 
   db_nekoha.query(query, values, (err, result) => {
     if (err) {
@@ -456,11 +482,15 @@ app.post('/api/chat', ipConnectionGuard, chatLimiter, (req, res) => {
       discord
     };
 
+    // Notify chat clients about the new message
     notifyChatClients(newMessage);
 
+    // Return the new message with a successful status
     res.status(201).json(newMessage);
   });
 });
+
+
 
 function ipConnectionGuard(req, res, next) {
   const ip = req.ip;
@@ -500,7 +530,7 @@ chatNamespace.on('connection', (socket) => {
 
   const forwarded = socket.handshake.headers['x-forwarded-for'];
   const ip = forwarded ? forwarded.split(',')[0].trim() : socket.handshake.address;
-  
+
   if (!isBot) {
     ipConnections[ip] = (ipConnections[ip] || 0) + 1;
 
@@ -537,6 +567,28 @@ chatNamespace.on('connection', (socket) => {
   const TIME_WINDOW = 3000; // 3 seconds
 
   socket.on('new_message', (message) => {
+    // Ensure the message is a string and not an object or any unexpected type
+    if (typeof message !== 'string') {
+      console.log(`Invalid message payload from ${ip}. Disconnecting socket.`);
+      socket.disconnect(true);
+      return;
+    }
+
+    // Strip invisible characters (e.g., zero-width space) and sanitize message
+    message = message.replace(/[\u200B-\u200D\uFEFF]/g, ''); // Remove zero-width spaces
+    message = message.trim(); // Clean the message by trimming whitespace
+
+    if (message.length === 0) {
+      console.log(`Empty message received from ${ip}. Disconnecting socket.`);
+      socket.disconnect(true);
+      return;
+    }
+
+    // Enforce message length limit (e.g., 2000 characters)
+    if (message.length > 2000) {
+      message = message.slice(0, 2000); // Truncate if message exceeds limit
+    }
+
     if (!isBot) {
       const now = Date.now();
       const timestamps = messageTimestamps.get(socket.id) || [];
@@ -551,13 +603,12 @@ chatNamespace.on('connection', (socket) => {
       }
     }
 
-    socket.broadcast.emit('new_message', message);
+    // Broadcast the sanitized and validated message to all other clients
+    socket.broadcast.emit('new_message', { username: socket.id, message });
   });
-  
-  // You can also listen for custom events sent from the client if needed
-  // Example: socket.on('message', (message) => { ... });
 
 });
+
 
 // Function to broadcast to all clients in the chat namespace
 function notifyChatClients(messageObject) {
@@ -566,6 +617,7 @@ function notifyChatClients(messageObject) {
 }
 
 setInterval(() => {
+  const TIME_WINDOW = 3000; // 3 seconds
   const now = Date.now();
   for (const [id, timestamps] of messageTimestamps.entries()) {
     const recent = timestamps.filter(ts => now - ts < TIME_WINDOW);
