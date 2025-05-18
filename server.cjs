@@ -701,10 +701,20 @@ cursorNamespace.on('connection', (socket) => {
     const now = Date.now();
     if (now - lastSent >= 20) {
       lastSent = now;
-      activeCursors[socket.id] = { ...data };
+
+      const name = typeof data.name === 'string' ? data.name.substring(0, 20) : 'Anonymous';
+
+      activeCursors[socket.id] = {
+        x: data.x,
+        y: data.y,
+        name,
+      };
+
       socket.broadcast.emit('cursor_position', {
         id: socket.id,
-        ...data
+        x: data.x,
+        y: data.y,
+        name,
       });
     }
   });
