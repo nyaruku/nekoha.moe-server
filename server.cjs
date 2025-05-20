@@ -368,6 +368,56 @@ app.get('/api/visit', (req, res) => {
 });
 
 
+app.get('/api/log/info', (req, res) => {
+  const channel = req.query.channel;
+  const rawStart = req.query.start;
+  const rawEnd = req.query.end;
+
+  if (!allowedChannels.includes(channel)) {
+    return res.status(400).json({ error: 'Invalid channel name' });
+  }
+
+  const timeStart = !isNaN(parseInt(rawStart)) ? Math.floor(parseInt(rawStart, 10) / 1000) : null;
+  const timeEnd = !isNaN(parseInt(rawEnd)) ? Math.floor(parseInt(rawEnd, 10) / 1000) : null;
+
+  if (timeStart !== null && timeEnd !== null && timeStart > timeEnd) {
+    return res.status(400).json({ error: 'Start time must be before end time' });
+  }
+
+  const limit = 100;
+  const conditions = [];
+  const params = [];
+
+  if (timeStart !== null) {
+    conditions.push('timestamp >= ?');
+    params.push(timeStart);
+  }
+  if (timeEnd !== null) {
+    conditions.push('timestamp <= ?');
+    params.push(timeEnd);
+  }
+
+  const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const sql = `
+    SELECT 
+      user_id,
+      COUNT(*) AS message_count
+    FROM \`${channel}\`
+    ${whereClause}
+    GROUP BY user_id
+    ORDER BY message_count DESC
+    LIMIT ${limit}
+  `;
+
+  db.execute(sql, params, (err, results) => {
+    if (err) {
+      console.error('Database error:', err);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+    res.json(results);
+  });
+});
 
 // ###########################
 //           YTDL
