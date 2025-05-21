@@ -75,6 +75,7 @@ setInterval(() => {
     await client.connect();
     console.log("Connected to Bancho!");
 
+    // #balkan removed
     const channelsToJoin = [
       "#osu", "#german", "#announce", "#arabic", "#bulgarian", "#cantonese", "#chinese", "#ctb", "#czechoslovak",
       "#dutch", "#english", "#estonian", "#filipino", "#finnish", "#french", "#greek", "#hebrew",
@@ -100,17 +101,52 @@ setInterval(() => {
         await message.user.fetchFromAPI();
         const avatarUrl = `https://a.ppy.sh/${message.user.id}`;
 
-        // Store message in respective MySQL table
         const tableName = channelName.slice(1); // Remove '#' to get table name
+        const userId = message.user.id;
+        const username = message.user.ircUsername;
+
         recordInsert(true);
         db.execute(
-          `INSERT INTO ${tableName} (timestamp, user_id, username, message) VALUES (?, ?, ?, ?)`,
-          [unixTimeInSeconds, message.user.id, message.user.ircUsername, originalMessage],
+          `INSERT INTO \`${tableName}\` (timestamp, user_id, username, message) VALUES (?, ?, ?, ?)`,
+          [unixTimeInSeconds, userId, username, originalMessage],
           (err) => {
             if (err) {
               recordInsert(false);
               console.error("Database error:", err);
-            }           
+              return;
+            }
+
+            // Get the most recent ID for this user in this channel
+            db.execute(
+              `SELECT MAX(id) AS max_id FROM \`${tableName}\` WHERE user_id = ?`,
+              [userId],
+              (err, [row]) => {
+                if (err || !row || row.max_id == null) {
+                  console.error("Failed to get max_id:", err || "No row");
+                  return;
+                }
+
+                const lastSeenId = row.max_id;
+
+                // Update the global latest_usernames cache
+                db.execute(
+                  `
+                  INSERT INTO latest_usernames (user_id, username, last_seen_id, last_seen_channel)
+                  VALUES (?, ?, ?, ?)
+                  ON DUPLICATE KEY UPDATE
+                    username = IF(VALUES(last_seen_id) > last_seen_id, VALUES(username), username),
+                    last_seen_id = GREATEST(VALUES(last_seen_id), last_seen_id),
+                    last_seen_channel = IF(VALUES(last_seen_id) > last_seen_id, VALUES(last_seen_channel), last_seen_channel)
+                  `,
+                  [userId, username, lastSeenId, tableName],
+                  (err) => {
+                    if (err) {
+                      console.error("Failed to update latest_usernames:", err);
+                    }
+                  }
+                );
+              }
+            );
           }
         );
       });

@@ -227,9 +227,11 @@ app.get('/api/log/stats', (req, res) => {
       return res.status(500).json({ error: error.message });
     }
 
-    // Calculate the total size of the database from MySQL metadata
-    const totalSize = results.reduce((sum, table) => sum + parseFloat(table.sizeMB), 0);
-    const totalRowCount = results.reduce((sum, table) => sum + parseInt(table.rowCount, 10), 0);
+    // Exclude 'latest_usernames' table
+    const filteredResults = results.filter(table => table.tableName !== 'latest_usernames');
+
+    const totalSize = filteredResults.reduce((sum, table) => sum + parseFloat(table.sizeMB), 0);
+    const totalRowCount = filteredResults.reduce((sum, table) => sum + parseInt(table.rowCount, 10), 0);
 
     exec("echo '" + process.env.SUDO_PW + "' | sudo -S du -sb /var/lib/mysql/osu_logger", (err, stdout) => {
       if (err) {
@@ -237,15 +239,13 @@ app.get('/api/log/stats', (req, res) => {
         return res.status(500).json({ error: "Failed to retrieve actual disk usage" });
       }
 
-      // Extract size from the 'du' output
       const actualSizeBytes = parseInt(stdout.split("\t")[0], 10);
-      const actualSizeMB = actualSizeBytes // Convert to MB with 2 decimals
 
       res.json({
         totalDatabaseSizeBytes: totalSize,
-        actualDiskAllocBytes: actualSizeMB,
+        actualDiskAllocBytes: actualSizeBytes,
         totalRowCount: totalRowCount,
-        tables: results
+        tables: filteredResults // use `filteredResults` here instead if you want to exclude it from the response
       });
     });
   });
@@ -372,53 +372,108 @@ app.get('/api/log/info', (req, res) => {
   const channel = req.query.channel;
   const rawStart = req.query.start;
   const rawEnd = req.query.end;
+  const page = Math.max(parseInt(req.query.page) || 1, 1);
+  const pageSize = Math.min(parseInt(req.query.pageSize) || 15, 100); // max 100 per page
 
   if (!allowedChannels.includes(channel)) {
     return res.status(400).json({ error: 'Invalid channel name' });
   }
 
-  const timeStart = !isNaN(parseInt(rawStart)) ? Math.floor(parseInt(rawStart, 10) / 1000) : null;
-  const timeEnd = !isNaN(parseInt(rawEnd)) ? Math.floor(parseInt(rawEnd, 10) / 1000) : null;
-
+  const timeStart = !isNaN(parseInt(rawStart)) ? parseInt(rawStart, 10) : null;
+  const timeEnd = !isNaN(parseInt(rawEnd)) ? parseInt(rawEnd, 10) : null;
+  
   if (timeStart !== null && timeEnd !== null && timeStart > timeEnd) {
     return res.status(400).json({ error: 'Start time must be before end time' });
   }
 
-  const limit = 100;
+  const offset = (page - 1) * pageSize;
+
   const conditions = [];
   const params = [];
 
   if (timeStart !== null) {
-    conditions.push('timestamp >= ?');
+    conditions.push('m.timestamp >= ?');
     params.push(timeStart);
   }
   if (timeEnd !== null) {
-    conditions.push('timestamp <= ?');
+    conditions.push('m.timestamp <= ?');
     params.push(timeEnd);
   }
 
   const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
-  const sql = `
-    SELECT 
-      user_id,
-      COUNT(*) AS message_count
-    FROM \`${channel}\`
+  const countSql = `
+    SELECT COUNT(DISTINCT m.user_id) AS total
+    FROM \`${channel}\` m
     ${whereClause}
-    GROUP BY user_id
-    ORDER BY message_count DESC
-    LIMIT ${limit}
   `;
 
-  db.execute(sql, params, (err, results) => {
-    if (err) {
-      console.error('Database error:', err);
+  const dataSql = `
+    SELECT 
+      m.user_id,
+      u.username,
+      COUNT(*) AS message_count
+    FROM \`${channel}\` m
+    LEFT JOIN latest_usernames u ON m.user_id = u.user_id
+    ${whereClause}
+    GROUP BY m.user_id, u.username
+    ORDER BY message_count DESC
+    LIMIT ${pageSize} OFFSET ${offset}
+  `;
+
+  const tableStatsSql = `
+    SELECT 
+      table_name AS table_name, 
+      table_rows AS row_count, 
+      ROUND((data_length + index_length) / 1024 / 1024, 2) AS allocated_mb
+    FROM information_schema.tables 
+    WHERE table_schema = 'osu_logger'
+      AND table_name != 'latest_usernames'
+  `;
+
+  const uniqueUsersSql = `
+    SELECT COUNT(*) AS unique_users FROM latest_usernames
+  `;
+
+  db.execute(countSql, params, (countErr, countResults) => {
+    if (countErr) {
+      console.error('Count query error:', countErr);
       return res.status(500).json({ error: 'Internal server error' });
     }
-    res.json(results);
+
+    const total = countResults[0].total;
+
+    db.execute(dataSql, params, (err, results) => {
+      if (err) {
+        console.error('Data query error:', err);
+        return res.status(500).json({ error: 'Internal server error' });
+      }
+
+      db.query(tableStatsSql, (tableErr, tableResults) => {
+        if (tableErr) {
+          console.error('Table stats error:', tableErr);
+          return res.status(500).json({ error: 'Failed to retrieve table stats' });
+        }
+
+        db.query(uniqueUsersSql, (userErr, userResults) => {
+          if (userErr) {
+            console.error('Unique users error:', userErr);
+            return res.status(500).json({ error: 'Failed to retrieve unique users count' });
+          }
+
+          const uniqueUsersLogged = userResults[0].unique_users;
+
+          res.json({
+            items: results,
+            total,
+            tableStats: tableResults,
+            uniqueUsersLogged
+          });
+        });
+      });
+    });
   });
 });
-
 // ###########################
 //           YTDL
 // ###########################
