@@ -408,18 +408,24 @@ app.get('/api/log/info', (req, res) => {
     ${whereClause}
   `;
 
-  const dataSql = `
+const dataSql = `
+  SELECT 
+    t.user_id,
+    u.username,
+    t.message_count
+  FROM (
     SELECT 
       m.user_id,
-      u.username,
       COUNT(*) AS message_count
     FROM \`${channel}\` m
-    LEFT JOIN latest_usernames u ON m.user_id = u.user_id
     ${whereClause}
-    GROUP BY m.user_id, u.username
+    GROUP BY m.user_id
     ORDER BY message_count DESC
     LIMIT ${pageSize} OFFSET ${offset}
-  `;
+  ) AS t
+  LEFT JOIN latest_usernames u ON t.user_id = u.user_id
+  ORDER BY t.message_count DESC
+`;
 
   const tableStatsSql = `
     SELECT 

@@ -1,0 +1,1 @@
+CALL analyze_all_tables('osu_logger');

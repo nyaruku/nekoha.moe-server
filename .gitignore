@@ -1,3 +1,4 @@
 secret.env
 testing
 backups
+sql/.env
