@@ -11,9 +11,9 @@ let insertHistory = []; // Store timestamps of inserts
 function recordInsert(success = true) {
   insertHistory.push(Date.now());
 
-  // Keep only the last 60 minutes of data
-  const oneHourAgo = Date.now() - 3600000;
-  insertHistory = insertHistory.filter(ts => ts > oneHourAgo);
+  // Keep only the last 24 hours of data
+  const oneDayAgo = Date.now() - 86400000;
+  insertHistory = insertHistory.filter(ts => ts > oneDayAgo);
 }
 
 
@@ -40,6 +40,22 @@ const db = mysql.createPool({
   enableKeepAlive: true,
   keepAliveInitialDelay: 0,
 });
+
+const db_info = mysql.createPool({
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PW,
+  database: process.env.DB_NAME_LOGGER_INFO,
+
+  waitForConnections: true,
+  connectionLimit: 1000,
+  maxIdle: 1000, // max idle connections, the default value is the same as `connectionLimit`
+  idleTimeout: 60000, // idle connections timeout, in milliseconds, the default value 60000
+  queueLimit: 0,
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 0,
+});
+
 
 const username = process.env.OSU_USERNAME;
 const password = process.env.OSU_IRC_PW;
@@ -97,7 +113,6 @@ setInterval(() => {
         resetWatchdog();
         const unixTimeInSeconds = Math.floor(Date.now());
         const originalMessage = message.message;
-        message.message = message.message.replace(/@/g, " "); // Clean message
         await message.user.fetchFromAPI();
         const avatarUrl = `https://a.ppy.sh/${message.user.id}`;
 
@@ -131,14 +146,14 @@ setInterval(() => {
                 // Update the global latest_usernames cache
                 db.execute(
                   `
-                  INSERT INTO latest_usernames (user_id, username, last_seen_id, last_seen_channel)
+                  INSERT INTO latest_usernames (user_id, username, last_seen_channel, timestamp)
                   VALUES (?, ?, ?, ?)
                   ON DUPLICATE KEY UPDATE
-                    username = IF(VALUES(last_seen_id) > last_seen_id, VALUES(username), username),
-                    last_seen_id = GREATEST(VALUES(last_seen_id), last_seen_id),
-                    last_seen_channel = IF(VALUES(last_seen_id) > last_seen_id, VALUES(last_seen_channel), last_seen_channel)
+                    username = IF(VALUES(timestamp) > timestamp, VALUES(username), username),
+                    last_seen_channel = IF(VALUES(timestamp) > timestamp, VALUES(last_seen_channel), last_seen_channel),
+                    timestamp = GREATEST(VALUES(timestamp), timestamp)
                   `,
-                  [userId, username, lastSeenId, tableName],
+                  [userId, username, tableName, unixTimeInSeconds],
                   (err) => {
                     if (err) {
                       console.error("Failed to update latest_usernames:", err);
@@ -149,6 +164,17 @@ setInterval(() => {
             );
           }
         );
+
+        db_info.execute(
+          `INSERT INTO \`all\` (timestamp, user_id, username, message, channel) VALUES (?, ?, ?, ?, ?)`,
+          [unixTimeInSeconds, userId, username, originalMessage, tableName],
+          (err) => {
+            if (err) {
+              console.error("Database error:", err);
+              return;
+            }
+        });
+
       });
     }
 
@@ -179,11 +205,11 @@ setInterval(() => {
 }, 60000);
 
 app.get("/api2/insert", (req, res) => {
-  const oneHourAgo = Date.now() - 3600000;
+  const oneHourAgo = Date.now() - 86400000;
   let dataPoints = [];
 
   // Group inserts into per-minute intervals
-  for (let i = 0; i < 60; i++) {
+  for (let i = 0; i < 1440; i++) {
     const startTime = oneHourAgo + i * 60000;
     const count = insertHistory.filter(ts => ts >= startTime && ts < startTime + 60000).length;
 
