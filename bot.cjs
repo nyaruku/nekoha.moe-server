@@ -137,7 +137,7 @@ socket.on('new_message', (message) => {
 
   const channel = discordclient.channels.cache.get(TARGET_CHANNEL_ID);
   if (channel) {
-    channel.send(`[${message.username || 'anonymous'}] ${sanitizeDiscordMentions(message.message)}`);
+    channel.send(`[${sanitizeDiscordMentions(message.username) || 'anonymous'}] ${sanitizeDiscordMentions(message.message)}`);
   }
 });
 
