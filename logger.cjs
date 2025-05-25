@@ -74,8 +74,8 @@ function resetWatchdog() {
 
 setInterval(() => {
   const now = Date.now();
-  if (now - lastMessageTimestamp > 60000) { // no message for 60 seconds
-    console.warn("No IRC messages received for 60 seconds, reconnecting...");
+  if (now - lastMessageTimestamp > 120000) { // no message for 60 seconds
+    console.warn("No IRC messages received for 120 seconds, reconnecting...");
     client.disconnect().then(() => {
       client.connect().catch(err => {
         console.error("Reconnect failed:", err);
