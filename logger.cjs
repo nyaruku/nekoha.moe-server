@@ -166,7 +166,7 @@ setInterval(() => {
           }
         );
         db.execute(
-          `INSERT INTO \`all\` (timestamp, user_id, username, message, channel) VALUES (?, ?, ?, ?, ?)`,
+          `INSERT INTO \`allm\` (timestamp, user_id, username, message, channel) VALUES (?, ?, ?, ?, ?)`,
           [unixTimeInSeconds, userId, username, originalMessage, tableName],
           (err) => {
             if (err) {
