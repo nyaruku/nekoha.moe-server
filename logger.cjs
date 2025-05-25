@@ -41,6 +41,7 @@ const db = mysql.createPool({
   keepAliveInitialDelay: 0,
 });
 
+/* not used
 const db_info = mysql.createPool({
   host: process.env.DB_HOST,
   user: process.env.DB_USER,
@@ -55,7 +56,7 @@ const db_info = mysql.createPool({
   enableKeepAlive: true,
   keepAliveInitialDelay: 0,
 });
-
+*/
 
 const username = process.env.OSU_USERNAME;
 const password = process.env.OSU_IRC_PW;
@@ -164,8 +165,7 @@ setInterval(() => {
             );
           }
         );
-
-        db_info.execute(
+        db.execute(
           `INSERT INTO \`all\` (timestamp, user_id, username, message, channel) VALUES (?, ?, ?, ?, ?)`,
           [unixTimeInSeconds, userId, username, originalMessage, tableName],
           (err) => {
