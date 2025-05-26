@@ -121,7 +121,7 @@ app.get('/api/log', (req, res) => {
   
   let channel = req.query.channel ? req.query.channel : 'osu'; // Default to 'osu'
 
-  if (!allowedChannels.includes(channel) && !(channel == "all")) {
+  if (!allowedChannels.includes(channel) && !(channel == "allm")) {
     return res.status(400).send('Invalid channel');
   }
 
@@ -165,30 +165,13 @@ app.get('/api/log', (req, res) => {
 
   let whereClause = conditions.length > 0 ? " WHERE " + conditions.join(" AND ") : "";
 
-  if (channel == "all") {
-    query = allowedChannels
-      .filter(ch => ch !== "all") // Exclude "all" from actual table names
-      .map(ch => `SELECT * FROM ${ch} ${whereClause}`)
-      .join(" UNION ALL ");
-  } else {
-    query = `SELECT * FROM ${channel} ${whereClause}`;
-  }
+  query = `SELECT * FROM ${channel} ${whereClause}`;
 
-
-  if (channel == "all") {
-    if (sort === "asc" || sort === "desc") {
-      query += ` ORDER BY timestamp ${sort}`;
-    } else {
-      query += " ORDER BY timestamp ASC";
-    }
+  if (sort === "asc" || sort === "desc") {
+    query += ` ORDER BY id ${sort}`;
   } else {
-    if (sort === "asc" || sort === "desc") {
-      query += ` ORDER BY id ${sort}`;
-    } else {
-      query += " ORDER BY id ASC";
-    }
+    query += " ORDER BY id ASC";
   }
-  
 
   if (!isNaN(limit) && limit > 0) {
     query += ` LIMIT ${limit}`;
@@ -211,7 +194,24 @@ app.get('/api/log', (req, res) => {
   });
 });
 
-app.get('/api/log/stats', (req, res) => {
+app.get('/api/log/stats', async (req, res) => {
+
+  const [totalRowsPromise, uniqueUsersPromise] = [
+    db.promise().query("SELECT COUNT(*) AS total FROM `allm`"),
+    db.promise().query("SELECT COUNT(*) AS unique_users FROM latest_usernames"),
+  ];
+
+  const [[totalRows], [uniqueUsers]] = await Promise.all([totalRowsPromise, uniqueUsersPromise]).catch(err => {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+    return [ [null], [null] ]; // keep destructuring safe
+  });
+
+  if (!totalRows || !uniqueUsers) return;
+
+  const totalRowCount = totalRows[0].total;
+  const uniqueUsersCount = uniqueUsers[0].unique_users;
+
   const query = `
     SELECT table_name AS tableName,
            (data_length + index_length) AS sizeMB,
@@ -229,9 +229,7 @@ app.get('/api/log/stats', (req, res) => {
 
     // Exclude 'latest_usernames' table
     const filteredResults = results.filter(table => table.tableName !== 'latest_usernames');
-
     const totalSize = filteredResults.reduce((sum, table) => sum + parseFloat(table.sizeMB), 0);
-    const totalRowCount = filteredResults.reduce((sum, table) => sum + parseInt(table.rowCount, 10), 0);
 
     exec("echo '" + process.env.SUDO_PW + "' | sudo -S du -sb /var/lib/mysql/osu_logger", (err, stdout) => {
       if (err) {
@@ -245,12 +243,12 @@ app.get('/api/log/stats', (req, res) => {
         totalDatabaseSizeBytes: totalSize,
         actualDiskAllocBytes: actualSizeBytes,
         totalRowCount: totalRowCount,
+        uniqueUsers: uniqueUsersCount,
         tables: filteredResults // use `filteredResults` here instead if you want to exclude it from the response
       });
     });
   });
 });
-
 
 app.get('/api/log/export', (req, res) => {
   const fileName = `chat_log_mysqldump_${Date.now()}.sql`;
@@ -296,7 +294,7 @@ const formatRow = (timestamp, user_id, username, message) => {
 app.get('/api/log/download', async (req, res) => {
   let channel = req.query.channel ? req.query.channel : 'osu'; // Default to 'osu'
 
-  if (!allowedChannels.includes(channel)) {
+  if (!allowedChannels.includes(channel) && !(channel == "allm")) {
     return res.status(400).send('Invalid channel');
   }
 
@@ -375,7 +373,7 @@ app.get('/api/log/info', (req, res) => {
   const page = Math.max(parseInt(req.query.page) || 1, 1);
   const pageSize = Math.min(parseInt(req.query.pageSize) || 15, 100); // max 100 per page
 
-  if (!allowedChannels.includes(channel)) {
+  if (!allowedChannels.includes(channel) && !(channel == "allm")) {
     return res.status(400).json({ error: 'Invalid channel name' });
   }
 
@@ -437,10 +435,6 @@ const dataSql = `
       AND table_name != 'latest_usernames'
   `;
 
-  const uniqueUsersSql = `
-    SELECT COUNT(*) AS unique_users FROM latest_usernames
-  `;
-
   db.execute(countSql, params, (countErr, countResults) => {
     if (countErr) {
       console.error('Count query error:', countErr);
@@ -460,21 +454,10 @@ const dataSql = `
           console.error('Table stats error:', tableErr);
           return res.status(500).json({ error: 'Failed to retrieve table stats' });
         }
-
-        db.query(uniqueUsersSql, (userErr, userResults) => {
-          if (userErr) {
-            console.error('Unique users error:', userErr);
-            return res.status(500).json({ error: 'Failed to retrieve unique users count' });
-          }
-
-          const uniqueUsersLogged = userResults[0].unique_users;
-
-          res.json({
-            items: results,
-            total,
-            tableStats: tableResults,
-            uniqueUsersLogged
-          });
+        res.json({
+          items: results,
+          total,
+          tableStats: tableResults
         });
       });
     });
