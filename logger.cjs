@@ -3,20 +3,6 @@
 //         IRC LOGGER
 // ###########################
 
-// global 
-let insertCount = 0;
-let insertError = 0;
-let insertHistory = []; // Store timestamps of inserts
-
-function recordInsert(success = true) {
-  insertHistory.push(Date.now());
-
-  // Keep only the last 24 hours of data
-  const oneDayAgo = Date.now() - 86400000;
-  insertHistory = insertHistory.filter(ts => ts > oneDayAgo);
-}
-
-
 const mysql = require('mysql2');
 const express = require('express');
 const http = require('http');
@@ -121,7 +107,7 @@ setInterval(() => {
         const userId = message.user.id;
         const username = message.user.ircUsername;
 
-        recordInsert(true);
+        //recordInsert(true);
         db.execute(
           `INSERT INTO \`${tableName}\` (timestamp, user_id, username, message) VALUES (?, ?, ?, ?)`,
           [unixTimeInSeconds, userId, username, originalMessage],
@@ -203,32 +189,3 @@ server.listen(port, () => {
 setInterval(() => {
   insertError = 0;
 }, 60000);
-
-app.get("/api2/insert", (req, res) => {
-  const oneHourAgo = Date.now() - 86400000;
-  let dataPoints = [];
-
-  // Group inserts into per-minute intervals
-  for (let i = 0; i < 1440; i++) {
-    const startTime = oneHourAgo + i * 60000;
-    const count = insertHistory.filter(ts => ts >= startTime && ts < startTime + 60000).length;
-
-    // Append as time series data
-    dataPoints.push([startTime, count]);
-  }
-
-  res.json({
-    results: [
-      {
-        statement_id: 0,
-        series: [
-          {
-            name: "inserts_per_minute",
-            columns: ["time", "value"],
-            values: dataPoints
-          }
-        ]
-      }
-    ]
-  });
-});
