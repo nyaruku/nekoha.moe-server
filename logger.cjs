@@ -113,7 +113,7 @@ setInterval(() => {
           [unixTimeInSeconds, userId, username, originalMessage],
           (err) => {
             if (err) {
-              recordInsert(false);
+              //recordInsert(false);
               console.error("Database error:", err);
               return;
             }
