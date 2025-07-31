@@ -250,6 +250,83 @@ app.get('/api/log/stats', async (req, res) => {
   });
 });
 
+app.get('/api/log/stats-graph', (req, res) => {
+  const channel = req.query.channel;
+  const rawStart = req.query.start;
+  const rawEnd = req.query.end;
+  const limit = Math.min(parseInt(req.query.limit) || 50, 100); // default 50, max 150
+
+  if (!allowedChannels.includes(channel) && channel !== "allm") {
+    return res.status(400).json({ error: 'Invalid channel name' });
+  }
+
+  const timeStart = !isNaN(parseInt(rawStart)) ? parseInt(rawStart, 10) : 0;
+  const timeEnd = !isNaN(parseInt(rawEnd)) ? parseInt(rawEnd, 10) : Date.now();
+
+  if (timeStart > timeEnd) {
+    return res.status(400).json({ error: 'Start time must be before end time' });
+  }
+
+  const userSql = `
+    SELECT 
+      u.username,
+      t.message_count
+    FROM (
+      SELECT 
+        m.user_id,
+        COUNT(*) AS message_count
+      FROM \`${channel}\` m
+      WHERE m.timestamp BETWEEN ? AND ?
+      GROUP BY m.user_id
+      ORDER BY message_count DESC
+      LIMIT ${limit}
+    ) AS t
+    JOIN latest_usernames u ON u.user_id = t.user_id;
+  `;
+
+  const cacheSql = `
+    SELECT top_words
+    FROM word_frequency_cache
+    WHERE channel = ?
+  `;
+
+  const params = [timeStart, timeEnd];
+
+  // Run first query (user message counts)
+  db.execute(userSql, params, (err, userResults) => {
+    if (err) {
+      console.error('Stats-graph query error (users):', err);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+
+    // Run second query (cached top words)
+    db.execute(cacheSql, [channel], (cacheErr, cacheResults) => {
+      if (cacheErr) {
+        console.error('Stats-graph query error (cache):', cacheErr);
+        return res.status(500).json({ error: 'Internal server error' });
+      }
+
+      let topWords = [];
+      if (cacheResults.length > 0 && cacheResults[0].top_words) {
+        const cachedString = cacheResults[0].top_words.trim();
+        topWords = cachedString.split(' ').map(pair => {
+          const [countStr, ...wordParts] = pair.split(':');
+          return {
+            username: wordParts.join(':'),
+            message_count: parseInt(countStr, 10)
+          };
+        });
+      }
+
+      res.json({
+        users: userResults,
+        top_words: topWords,
+      });
+    });
+  });
+});
+
+
 app.get('/api/log/export', (req, res) => {
   const fileName = `chat_log_mysqldump_${Date.now()}.sql`;
   const filePath = path.join(__dirname, 'backups', fileName);
