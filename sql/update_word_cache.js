@@ -1,11 +1,10 @@
 import mysql from 'mysql2';
 import dotenv from 'dotenv';
-dotenv.config();
-
+dotenv.config({ path: 'secret.env' });
 const DB_USER = process.env.DB_USER;
 const DB_PW = process.env.DB_PW;
 const DB_NAME_LOGGER = process.env.DB_NAME_LOGGER;
-const DB_HOST = process.env.DB_HOST || 'localhost';
+const DB_HOST = process.env.DB_HOST;
 
 const channels = [
   'osu', 'german', 'portuguese', 'spanish', 'mapping', 'announce', 'osumania', 'help', 'lobby',
