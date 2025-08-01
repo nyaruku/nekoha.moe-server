@@ -125,7 +125,15 @@ app.get('/api/log', (req, res) => {
     return res.status(400).send('Invalid channel');
   }
 
-  let userId = parseInt(req.query.user_id, 10);
+  // Parse user_id: support single or multiple comma-separated IDs
+  let userIds = [];
+  if (req.query.user_id) {
+    userIds = req.query.user_id
+      .split(',')
+      .map(id => parseInt(id.trim(), 10))
+      .filter(id => !isNaN(id) && id > 0);
+  }
+
   let username = req.query.username ? req.query.username.trim() : null;
   let messageFilter = req.query.message ? req.query.message : null;
   let timeStart = parseInt(req.query.start, 10);
@@ -138,9 +146,11 @@ app.get('/api/log', (req, res) => {
   let conditions = [];
   let params = [];
 
-  if (!isNaN(userId) && userId > 0) {
-    conditions.push("user_id = ?");
-    params.push(userId);
+  if (userIds.length > 0) {
+    // Prepare placeholders for SQL IN clause
+    let placeholders = userIds.map(() => '?').join(',');
+    conditions.push(`user_id IN (${placeholders})`);
+    params.push(...userIds);
   }
 
   if (username) {
