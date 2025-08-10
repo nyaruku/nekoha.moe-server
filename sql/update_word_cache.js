@@ -1,6 +1,6 @@
 import mysql from 'mysql2';
 import dotenv from 'dotenv';
-dotenv.config({ path: 'secret.env' });
+dotenv.config({ path: '/home/admin/nekoha.moe/server/sql/secret.env' });
 const DB_USER = process.env.DB_USER;
 const DB_PW = process.env.DB_PW;
 const DB_NAME_LOGGER = process.env.DB_NAME_LOGGER;
@@ -111,10 +111,6 @@ async function processChannel(channel) {
         .sort((a, b) => b[1] - a[1])
         .slice(0, 100)
         .map(([word, count]) => `${count}:${word}`);
-
-      console.log(`Top words for ${channel} (count:word):`);
-      console.log(sorted.join(' '));
-      console.log('---------------------------------------');
 
       // Prepare insertion into word_frequency_cache table
       const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
