@@ -183,8 +183,10 @@ app.get('/api/log', (req, res) => {
     query += " ORDER BY id ASC";
   }
 
-  if (!isNaN(limit) && limit > 0) {
+  if (!isNaN(limit) && limit >= 100 && limit <= 50000 ) {
     query += ` LIMIT ${limit}`;
+  } else {
+    query += ` LIMIT 10000`;
   }
 
   if (!isNaN(offset) && offset > 0) {
