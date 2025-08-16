@@ -708,7 +708,7 @@ const messageTimestamps = new Map();
 
 chatNamespace.on('connection', (socket) => {
 
-  const token = socket.handshake.auth?.token;
+  const token = socket.handshake.query?.token;
   const isBot = token === process.env.BOT_SOCKET_SECRET;
   console.log('Received token:', token);
   console.log(process.env.BOT_SOCKET_SECRET);
