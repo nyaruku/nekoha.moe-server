@@ -3,3 +3,4 @@ testing
 backups
 sql/.env
 sql/*.log
+webhook.json

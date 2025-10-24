@@ -6,9 +6,22 @@
 const mysql = require('mysql2');
 const express = require('express');
 const http = require('http');
+const fs = require('fs');
+const { WebhookClient } = require('discord.js');
 
 // Import Secrets
 require('dotenv').config({ path: 'secret.env' });
+
+// ==========================
+// Load webhooks.json
+// ==========================
+const webhookMap = {};
+const webhookData = JSON.parse(fs.readFileSync('webhook.json', 'utf8'));
+
+for (const entry of webhookData) {
+  webhookMap[`#${entry.channelName}`] = new WebhookClient({ url: entry.webhookUrl });
+}
+const globalWebhook = webhookMap['#all-channels'];
 
 const { BanchoClient, OutgoingBanchoMessage, BanchoChannel } = require("bancho.js");
 
@@ -43,6 +56,7 @@ const db_info = mysql.createPool({
   keepAliveInitialDelay: 0,
 });
 */
+const bot_info_webhook = new WebhookClient({ url: process.env.WEBHOOK_INFO });
 
 const username = process.env.OSU_USERNAME;
 const password = process.env.OSU_IRC_PW;
@@ -61,7 +75,7 @@ function resetWatchdog() {
 
 setInterval(() => {
   const now = Date.now();
-  if (now - lastMessageTimestamp > 120000) { // no message for 60 seconds
+  if (now - lastMessageTimestamp > 120000) { // no message for 120 seconds
     console.warn("No IRC messages received for 120 seconds, reconnecting...");
     client.disconnect().then(() => {
       client.connect().catch(err => {
@@ -71,12 +85,29 @@ setInterval(() => {
   }
 }, 30000);
 
+async function safeSend(webhook, payload) {
+  for (let i = 0; i < 5; i++) {
+    try {
+      await webhook.send(payload);
+      return;
+    } catch (err) {
+      if (err.status === 429 && err.data?.retry_after) {
+        const wait = Math.ceil(err.data.retry_after * 1000);
+        console.warn(`Rate limited. Retrying in ${wait}ms`);
+        await new Promise(r => setTimeout(r, wait));
+      } else throw err;
+    }
+  }
+}
+
 // Bancho Client Logic - Listening to messages
 (async () => {
   try {
     console.log("IRC Logger Launched");
+    await safeSend(bot_info_webhook, { content: `IRC Logger Launched` });
     await client.connect();
     console.log("Connected to Bancho!");
+    await safeSend(bot_info_webhook, { content: `Connected to Bancho!` });
 
     // #balkan removed
     const channelsToJoin = [
@@ -94,6 +125,7 @@ setInterval(() => {
       const channel = client.getChannel(channelName);
       await channel.join();
       channels[channelName] = channel;
+      await safeSend(bot_info_webhook, { content: `Joined ${channelName} channel!` });
       console.log(`Joined ${channelName} channel!`);
 
       channel.on("message", async (message) => {
@@ -160,15 +192,36 @@ setInterval(() => {
               return;
             }
         });
-
+        const newUsername = `${username} (${userId})`;
+        console.log(newUsername);
+        const safeContent = originalMessage.replace(/@/g, " ");
+        // Send to matching Discord channel
+        const channelWebhook = webhookMap[channelName];
+        if (channelWebhook) {
+          try {
+            await safeSend(channelWebhook, { username: newUsername, avatarURL: avatarUrl, content: safeContent });
+          } catch (err) {
+            console.error(`Webhook send failed for ${channelName}:`, err.message);
+          }
+        }
+        // Send the same message to #all-channels webhook
+        if (globalWebhook) {
+          try {
+            await safeSend(globalWebhook, { username: newUsername, avatarURL: avatarUrl, content: safeContent });
+          } catch (err) {
+            console.error(`Global webhook send failed:`, err.message);
+          }
+        }
       });
     }
 
     client.on("disconnect", () => {
+      safeSend(bot_info_webhook, { content: `Disconnected from Bancho, attempting to reconnect...` });
       console.log("Disconnected from Bancho, attempting to reconnect...");
       client.connect().catch(err => console.error("Reconnection failed:", err));
     });
   } catch (error) {
+    safeSend(bot_info_webhook, { content: `An error occurred` });
     console.error("An error occurred:", error);
   }
 })();
@@ -189,3 +242,4 @@ server.listen(port, () => {
 setInterval(() => {
   insertError = 0;
 }, 60000);
+
