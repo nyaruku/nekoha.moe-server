@@ -132,7 +132,15 @@ async function safeSend(webhook, payload) {
         resetWatchdog();
         const unixTimeInSeconds = Math.floor(Date.now());
         const originalMessage = message.message;
-        await message.user.fetchFromAPI();
+        
+        // Try to fetch user data from API, but don't crash if it fails
+        try {
+          await message.user.fetchFromAPI();
+        } catch (err) {
+          console.warn(`Failed to fetch user data for ${message.user.ircUsername}:`, err.message);
+          // Continue without API data - we already have basic user info from IRC
+        }
+        
         const avatarUrl = `https://a.ppy.sh/${message.user.id}`;
 
         const tableName = channelName.slice(1); // Remove '#' to get table name
