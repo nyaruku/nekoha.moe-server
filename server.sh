@@ -1,12 +1,12 @@
 #!/bin/bash
 
-# Kill any existing instance of server.cjs
+# Kill any existing instance of server.js
 echo "Checking for existing server instances..."
-pkill -f "node server.cjs"
+pkill -f "node server.js"
 
 while true; do
     echo "Starting Server...."
-    node server.cjs
+    node server.js
     echo "Server crashed. Restarting..."
     sleep 1
 done

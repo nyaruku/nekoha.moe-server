@@ -1,19 +1,19 @@
-const mysql = require('mysql2');
-const express = require('express');
-const cors = require('cors');
-const http = require('http');
-const fs = require('fs');
-const crypto = require('node:crypto');
-const path = require('path');
-const { format } = require('date-fns');
-const os = require('os');
-const YTDlpWrap = require('yt-dlp-wrap').default;
-const ytDlp = new YTDlpWrap();
-require('dotenv').config({ path: 'secret.env' });
-const { exec } = require('child_process');
-const leoProfanity = require('leo-profanity');
-const rateLimit = require('express-rate-limit');
-leoProfanity.loadDictionary(); // optional, default is English
+import mysql from 'mysql2';
+import express from 'express';
+import cors from 'cors';
+import http from 'http';
+import fs from 'fs';
+import crypto from 'node:crypto';
+import path from 'path';
+import { format } from 'date-fns';
+import dotenv from 'dotenv';
+import { exec } from 'child_process';
+import rateLimit from 'express-rate-limit';
+import pg from 'pg';
+import { Server } from "socket.io";
+
+
+dotenv.config({ path: 'secret.env' });
 
 const algorithm = "aes-256"
 const secretKey = process.env.ENCRYPT_STRING
@@ -66,20 +66,18 @@ const formatTimestamp = (epochMs) => {
 // ####################################
 //     DATABASE & SERVER CONNECTION
 // ####################################
-const db = mysql.createPool({
-  host: process.env.DB_HOST,
-  user: process.env.DB_USER,
-  password: process.env.DB_PW,
-  database: process.env.DB_NAME_LOGGER,
 
-  waitForConnections: true,
-  connectionLimit: 1000,
-  maxIdle: 1000, // max idle connections, the default value is the same as `connectionLimit`
-  idleTimeout: 60000, // idle connections timeout, in milliseconds, the default value 60000
-  queueLimit: 0,
-  enableKeepAlive: true,
-  keepAliveInitialDelay: 0,
+const db = new pg.Pool({
+  host: process.env.PG_HOST,
+  user: process.env.PG_USER,
+  password: process.env.PG_PW,
+  database: process.env.PG_NAME_LOGGER,
+  port: process.env.PG_PORT,
+  max: 1000,
+  idleTimeoutMillis: 60000,
+  connectionTimeoutMillis: 2000,
 });
+
 const db_nekoha = mysql.createPool({
   host: process.env.DB_HOST,
   user: process.env.DB_USER,
@@ -95,15 +93,16 @@ const db_nekoha = mysql.createPool({
   keepAliveInitialDelay: 0,
 });
 
-// MySQL database connection test
-db.getConnection((err, connection) => {
+// PostgreSQL database connection test
+db.connect((err, client, release) => {
   if (err) {
-    console.error('Error connecting to MySQL:', err);
+    console.error('Error connecting to PostgreSQL:', err);
     return;
   }
-  console.log('Connected to MySQL (Connection Pool)');
-  connection.release();
+  console.log('Connected to PostgreSQL (Connection Pool)');
+  release(); // release the client back to the pool
 });
+
 
 // Server Connection
 const app = express();
@@ -146,32 +145,33 @@ app.get('/api/log', (req, res) => {
   let conditions = [];
   let params = [];
 
-  if (userIds.length > 0) {
-    // Prepare placeholders for SQL IN clause
-    let placeholders = userIds.map(() => '?').join(',');
-    conditions.push(`user_id IN (${placeholders})`);
-    params.push(...userIds);
-  }
+    let paramIndex = 1;
 
-  if (username) {
-    conditions.push("username = ?");
+    if (userIds.length > 0) {
+        let userPlaceholders = userIds.map(() => `$${paramIndex++}`).join(',');
+        conditions.push(`user_id IN (${userPlaceholders})`);
+        params.push(...userIds);
+    }
+
+    if (username) {
+    conditions.push(`username = $${paramIndex++}`);
     params.push(username);
-  }
+    }
 
-  if (messageFilter) {
-    conditions.push("message LIKE ?");
+    if (messageFilter) {
+    conditions.push(`message LIKE $${paramIndex++}`);
     params.push(`%${messageFilter}%`);
-  }
+    }
 
-  if (!isNaN(timeStart)) {
-    conditions.push("timestamp >= ?");
+    if (!isNaN(timeStart)) {
+    conditions.push(`timestamp >= $${paramIndex++}`);
     params.push(timeStart);
-  }
+    }
 
-  if (!isNaN(timeEnd)) {
-    conditions.push("timestamp <= ?");
+    if (!isNaN(timeEnd)) {
+    conditions.push(`timestamp <= $${paramIndex++}`);
     params.push(timeEnd);
-  }
+    }
 
   let whereClause = conditions.length > 0 ? " WHERE " + conditions.join(" AND ") : "";
 
@@ -196,77 +196,82 @@ app.get('/api/log', (req, res) => {
   // console.log("Executing query:", query);
   // console.log("With parameters:", params);
 
-  db.execute(query, params, (err, results) => {
+  db.query(query, params, (err, result) => {
     if (err) {
       console.error("Error fetching entries:", err);
       res.status(500).send("Error fetching chat");
       return;
     }
-    res.json(results);
+    const normalizedRows = result.rows.map(r => ({
+        ...r,
+        id: parseInt(r.id, 10),
+        user_id: parseInt(r.user_id, 10),
+        timestamp: parseInt(r.timestamp, 10),
+        message: r.message || ''
+    }));
+    res.json(normalizedRows);
   });
 });
 
 app.get('/api/log/stats', async (req, res) => {
+  try {
+    // total messages and unique users
+    const totalRowsResult = await db.query(`SELECT COUNT(*) AS total FROM allm`);
+    const uniqueUsersResult = await db.query(`SELECT COUNT(*) AS unique_users FROM latest_usernames`);
 
-  const [totalRowsPromise, uniqueUsersPromise] = [
-    db.promise().query("SELECT COUNT(*) AS total FROM `allm`"),
-    db.promise().query("SELECT COUNT(*) AS unique_users FROM latest_usernames"),
-  ];
+    const totalRowCount = parseInt(totalRowsResult.rows[0].total, 10);
+    const uniqueUsersCount = parseInt(uniqueUsersResult.rows[0].unique_users, 10);
 
-  const [[totalRows], [uniqueUsers]] = await Promise.all([totalRowsPromise, uniqueUsersPromise]).catch(err => {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-    return [ [null], [null] ]; // keep destructuring safe
-  });
+    // table info
+    const tableQuery = `
+      SELECT
+        table_name AS "tableName",
+        pg_total_relation_size(quote_ident(table_name)) AS "sizeMB",
+        (SELECT reltuples::bigint FROM pg_class WHERE relname = table_name) AS "rowCount"
+      FROM information_schema.tables
+      WHERE table_schema = 'public'
+      ORDER BY "rowCount" DESC;
+    `;
 
-  if (!totalRows || !uniqueUsers) return;
+    const tableResults = await db.query(tableQuery);
 
-  const totalRowCount = totalRows[0].total;
-  const uniqueUsersCount = uniqueUsers[0].unique_users;
+    const filteredResults = tableResults.rows
+      .filter(t => t.tableName !== 'latest_usernames')
+      .map(t => ({
+        tableName: t.tableName,
+        rowCount: parseInt(t.rowCount ?? 0, 10),
+        allocated_mb: parseInt(t.sizeMB ?? 0, 10)  // keep it in bytes
+      }));
 
-  const query = `
-    SELECT table_name AS tableName,
-           (data_length + index_length) AS sizeMB,
-           table_rows AS rowCount
-    FROM information_schema.TABLES
-    WHERE table_schema = 'osu_logger'
-    ORDER BY table_rows DESC;
-  `;
+    // total allocated
+    const totalSize = filteredResults.reduce((sum, t) => sum + t.allocated_mb, 0);
 
-  db.query(query, (error, results) => {
-    if (error) {
-      console.error('Database query error:', error);
-      return res.status(500).json({ error: error.message });
-    }
+    const actualSizeBytes = 0; // Docker container cannot access actual disk usage
 
-    // Exclude 'latest_usernames' table
-    const filteredResults = results.filter(table => table.tableName !== 'latest_usernames');
-    const totalSize = filteredResults.reduce((sum, table) => sum + parseFloat(table.sizeMB), 0);
+    const tables = filteredResults.map(t => ({
+        tableName: t.tableName,       // keep the correct key
+        rowCount: t.rowCount,         // match front-end expectation
+        sizeMB: t.allocated_mb   // already computed in filteredResults
+    }));
 
-    exec("echo '" + process.env.SUDO_PW + "' | sudo -S du -sb /var/lib/mysql/osu_logger", (err, stdout) => {
-      if (err) {
-        console.error("Error executing du command:", err);
-        return res.status(500).json({ error: "Failed to retrieve actual disk usage" });
-      }
-
-      const actualSizeBytes = parseInt(stdout.split("\t")[0], 10);
-
-      res.json({
-        totalDatabaseSizeBytes: totalSize,
-        actualDiskAllocBytes: actualSizeBytes,
+    res.json({
         totalRowCount: totalRowCount,
         uniqueUsers: uniqueUsersCount,
-        tables: filteredResults // use `filteredResults` here instead if you want to exclude it from the response
-      });
+        tables,
+        totalDatabaseSizeBytes: totalSize,
+        actualDiskAllocBytes: actualSizeBytes,
     });
-  });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.get('/api/log/stats-graph', (req, res) => {
+app.get('/api/log/stats-graph', async (req, res) => {
   const channel = req.query.channel;
   const rawStart = req.query.start;
   const rawEnd = req.query.end;
-  const limit = Math.min(parseInt(req.query.limit) || 50, 100); // default 50, max 150
+  const limit = Math.min(parseInt(req.query.limit) || 50, 100); // default 50, max 100
 
   if (!allowedChannels.includes(channel) && channel !== "allm") {
     return res.status(400).json({ error: 'Invalid channel name' });
@@ -279,167 +284,177 @@ app.get('/api/log/stats-graph', (req, res) => {
     return res.status(400).json({ error: 'Start time must be before end time' });
   }
 
-  const userSql = `
+  try {
+    // Postgres uses $1, $2 for placeholders
+    const params = [timeStart, timeEnd];
+
+    const userSql = `
     SELECT 
-      u.username,
-      t.message_count
+        u.username,
+        t.message_count
     FROM (
-      SELECT 
+        SELECT 
         m.user_id,
-        COUNT(*) AS message_count
-      FROM \`${channel}\` m
-      WHERE m.timestamp BETWEEN ? AND ?
-      GROUP BY m.user_id
-      ORDER BY message_count DESC
-      LIMIT ${limit}
+        COUNT(*)::int AS message_count
+        FROM "${channel}" m
+        WHERE m.timestamp BETWEEN $1 AND $2
+        GROUP BY m.user_id
+        ORDER BY message_count DESC
+        LIMIT ${limit}
     ) AS t
     JOIN latest_usernames u ON u.user_id = t.user_id;
-  `;
+    `;
 
-  const cacheSql = `
-    SELECT top_words
-    FROM word_frequency_cache
-    WHERE channel = ?
-  `;
+    const cacheSql = `
+      SELECT top_words
+      FROM word_frequency_cache
+      WHERE channel = $1
+    `;
 
-  const params = [timeStart, timeEnd];
-
-  // Run first query (user message counts)
-  db.execute(userSql, params, (err, userResults) => {
-    if (err) {
-      console.error('Stats-graph query error (users):', err);
-      return res.status(500).json({ error: 'Internal server error' });
-    }
+    // Run first query (user message counts)
+    const userResults = (await db.query(userSql, params)).rows.map(r => ({
+        username: r.username,
+        message_count: parseInt(r.message_count, 10)
+    }));
 
     // Run second query (cached top words)
-    db.execute(cacheSql, [channel], (cacheErr, cacheResults) => {
-      if (cacheErr) {
-        console.error('Stats-graph query error (cache):', cacheErr);
-        return res.status(500).json({ error: 'Internal server error' });
-      }
+    const cacheResults = (await db.query(cacheSql, [channel])).rows;
 
-      let topWords = [];
-      if (cacheResults.length > 0 && cacheResults[0].top_words) {
-        const cachedString = cacheResults[0].top_words.trim();
-        topWords = cachedString.split(' ').map(pair => {
-          const [countStr, ...wordParts] = pair.split(':');
-          return {
-            username: wordParts.join(':'),
-            message_count: parseInt(countStr, 10)
-          };
-        });
-      }
-
-      res.json({
-        users: userResults,
-        top_words: topWords,
+    let topWords = [];
+    if (cacheResults.length > 0 && cacheResults[0].top_words) {
+      const cachedString = cacheResults[0].top_words.trim();
+      topWords = cachedString.split(' ').map(pair => {
+        const [countStr, ...wordParts] = pair.split(':');
+        return {
+          username: wordParts.join(':'),
+          message_count: parseInt(countStr, 10)
+        };
       });
-    });
-  });
-});
-
-
-app.get('/api/log/export', (req, res) => {
-  const fileName = `chat_log_mysqldump_${Date.now()}.sql`;
-  const filePath = path.join(__dirname, 'backups', fileName);
-
-  // Ensure the backups directory exists
-  if (!fs.existsSync(path.dirname(filePath))) {
-    fs.mkdirSync(path.dirname(filePath));
-  }
-
-  // Create MySQL dump command
-  const dumpCommand = `mysqldump --user=${process.env.DB_USER} --password=${process.env.DB_PW} --host=${process.env.DB_HOST} ${process.env.DB_NAME_LOGGER} > ${filePath}`;
-
-  // Execute the command to export the database
-  exec(dumpCommand, (error, stdout, stderr) => {
-    if (error) {
-      console.error('Error exporting database:', error);
-      return res.status(500).json({ error: 'Failed to export database' });
     }
-    // Send the backup file to the client
-    res.download(filePath, fileName, (err) => {
-      if (err) {
-        console.error('Error sending file:', err);
-        return res.status(500).json({ error: 'Failed to send database backup' });
-      }
 
-      // Optionally, delete the file after download
-      fs.unlink(filePath, (unlinkErr) => {
-        if (unlinkErr) {
-          console.error('Error deleting backup file:', unlinkErr);
-        }
-      });
+    res.json({
+      users: userResults,
+      top_words: topWords,
     });
-  });
+  } catch (err) {
+    console.error('Stats-graph query error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
+
+// app.get('/api/log/export', (req, res) => {
+//   const fileName = `chat_log_pgsql_${Date.now()}.sql`;
+//   const filePath = path.join(__dirname, 'backups', fileName);
+
+//   // Ensure the backups directory exists
+//   if (!fs.existsSync(path.dirname(filePath))) {
+//     fs.mkdirSync(path.dirname(filePath), { recursive: true });
+//   }
+
+//   // Create PostgreSQL dump command
+//   // Using PGPASSWORD environment variable for password
+//   const dumpCommand = `PGPASSWORD='${process.env.PG_PW}' pg_dump --username=${process.env.PG_USER} --host=${process.env.PG_HOST} --format=plain --no-owner --no-privileges ${process.env.PG_NAME_LOGGER} > ${filePath}`;
+
+//   exec(dumpCommand, (error, stdout, stderr) => {
+//     if (error) {
+//       console.error('Error exporting PostgreSQL database:', error, stderr);
+//       return res.status(500).json({ error: 'Failed to export database' });
+//     }
+
+//     // Send the backup file to the client
+//     res.download(filePath, fileName, (err) => {
+//       if (err) {
+//         console.error('Error sending file:', err);
+//         return res.status(500).json({ error: 'Failed to send database backup' });
+//       }
+
+//       // Delete the file after download
+//       fs.unlink(filePath, (unlinkErr) => {
+//         if (unlinkErr) {
+//           console.error('Error deleting backup file:', unlinkErr);
+//         }
+//       });
+//     });
+//   });
+// });
 
 // Function to format each row with fixed column widths
 const formatRow = (timestamp, user_id, username, message) => {
   return `${timestamp.padEnd(22)} ${user_id.toString().padEnd(10)} ${username.padEnd(16)} ${message}`;
 };
 
-// API to export a single table as CSV
-app.get('/api/log/download', async (req, res) => {
-  let channel = req.query.channel ? req.query.channel : 'osu'; // Default to 'osu'
+// // API to export a single table as CSV/TXT
+// app.get('/api/log/download', async (req, res) => {
+//   const channel = req.query.channel ? req.query.channel : 'osu'; // Default to 'osu'
 
-  if (!allowedChannels.includes(channel) && !(channel == "allm")) {
-    return res.status(400).send('Invalid channel');
-  }
+//   if (!allowedChannels.includes(channel) && channel !== "allm") {
+//     return res.status(400).send('Invalid channel');
+//   }
 
-  const fileName = `chat_log_${channel}_${Date.now()}.txt`;
-  const filePath = path.join(__dirname, 'backups', fileName);
+//   const fileName = `chat_log_${channel}_${Date.now()}.txt`;
+//   const filePath = path.join(__dirname, 'backups', fileName);
 
-  // Ensure the backups directory exists
-  if (!fs.existsSync(path.dirname(filePath))) {
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  }
+//   // Ensure the backups directory exists
+//   if (!fs.existsSync(path.dirname(filePath))) {
+//     fs.mkdirSync(path.dirname(filePath), { recursive: true });
+//   }
 
-  const writeStream = fs.createWriteStream(filePath);
+//   const writeStream = fs.createWriteStream(filePath);
 
-  db.query(`SELECT timestamp, user_id, username, message FROM ${channel}`, (err, rows, fields) => {
-    if (err) {
-      console.error(`Error exporting table ${channel}:`, err);
-      return res.status(500).json({ error: `Failed to export table: ${channel}` });
-    }
+//   // Use parameterized query syntax for Postgres
+//   const queryText = `SELECT timestamp, user_id, username, message FROM "${channel}"`;
 
-    if (rows.length > 0) {
-      writeStream.write(formatRow("timestamp", "user_id", "username", "message") + '\n');
-    }
+//   db.query(queryText, [], (err, result) => {
+//     if (err) {
+//       console.error(`Error exporting table ${channel}:`, err);
+//       return res.status(500).json({ error: `Failed to export table: ${channel}` });
+//     }
 
-    rows.forEach(row => {
-      writeStream.write(formatRow(
-        formatTimestamp(row.timestamp),
-        row.user_id,
-        row.username,
-        row.message
-      ) + '\n');
-    });
+//     const rows = result.rows.map(r => ({
+//         timestamp: parseInt(r.timestamp, 10),
+//         user_id: parseInt(r.user_id, 10),
+//         username: r.username || '',
+//         message: r.message || ''
+//     }));
 
-    writeStream.end();
+//     // Write headers
+//     if (rows.length > 0) {
+//       writeStream.write(formatRow("timestamp", "user_id", "username", "message") + '\n');
+//     }
 
-    writeStream.on('finish', () => {
-      res.download(filePath, fileName, (err) => {
-        if (err) {
-          console.error('Error sending file:', err);
-          return res.status(500).json({ error: 'Failed to send TXT file' });
-        }
+//     rows.forEach(row => {
+//       writeStream.write(formatRow(
+//         formatTimestamp(row.timestamp),
+//         row.user_id,
+//         row.username,
+//         row.message
+//       ) + '\n');
+//     });
 
-        // Delete file after download
-        fs.unlink(filePath, (unlinkErr) => {
-          if (unlinkErr) {
-            console.error('Error deleting TXT file:', unlinkErr);
-          }
-        });
-      });
-    });
+//     writeStream.end();
 
-    writeStream.on('error', (err) => {
-      console.error('Error writing TXT file:', err);
-      return res.status(500).json({ error: 'Failed to write TXT file' });
-    });
-  });
-});
+//     writeStream.on('finish', () => {
+//       res.download(filePath, fileName, (err) => {
+//         if (err) {
+//           console.error('Error sending file:', err);
+//           return res.status(500).json({ error: 'Failed to send TXT file' });
+//         }
+
+//         // Delete file after download
+//         fs.unlink(filePath, (unlinkErr) => {
+//           if (unlinkErr) {
+//             console.error('Error deleting TXT file:', unlinkErr);
+//           }
+//         });
+//       });
+//     });
+
+//     writeStream.on('error', (err) => {
+//       console.error('Error writing TXT file:', err);
+//       return res.status(500).json({ error: 'Failed to write TXT file' });
+//     });
+//   });
+// });
 
 // GET + increment visit counter
 app.get('/api/visit', (req, res) => {
@@ -455,108 +470,142 @@ app.get('/api/visit', (req, res) => {
 });
 
 
-app.get('/api/log/info', (req, res) => {
+app.get('/api/log/info', async (req, res) => {
   const channel = req.query.channel;
   const rawStart = req.query.start;
   const rawEnd = req.query.end;
   const page = Math.max(parseInt(req.query.page) || 1, 1);
   const pageSize = Math.min(parseInt(req.query.pageSize) || 15, 100); // max 100 per page
 
-  if (!allowedChannels.includes(channel) && !(channel == "allm")) {
+  if (!allowedChannels.includes(channel) && channel !== "allm") {
     return res.status(400).json({ error: 'Invalid channel name' });
   }
 
   const timeStart = !isNaN(parseInt(rawStart)) ? parseInt(rawStart, 10) : null;
   const timeEnd = !isNaN(parseInt(rawEnd)) ? parseInt(rawEnd, 10) : null;
-  
+
   if (timeStart !== null && timeEnd !== null && timeStart > timeEnd) {
     return res.status(400).json({ error: 'Start time must be before end time' });
   }
 
   const offset = (page - 1) * pageSize;
-
   const conditions = [];
   const params = [];
+  let paramIndex = 1;
 
   if (timeStart !== null) {
-    conditions.push('m.timestamp >= ?');
+    conditions.push(`m.timestamp >= $${paramIndex++}`);
     params.push(timeStart);
   }
   if (timeEnd !== null) {
-    conditions.push('m.timestamp <= ?');
+    conditions.push(`m.timestamp <= $${paramIndex++}`);
     params.push(timeEnd);
   }
 
-  const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : '';
 
+  // Count total distinct users
   const countSql = `
     SELECT COUNT(DISTINCT m.user_id) AS total
-    FROM \`${channel}\` m
+    FROM "${channel}" m
     ${whereClause}
   `;
 
-const dataSql = `
-  SELECT 
-    t.user_id,
-    u.username,
-    t.message_count
-  FROM (
-    SELECT 
-      m.user_id,
-      COUNT(*) AS message_count
-    FROM \`${channel}\` m
-    ${whereClause}
-    GROUP BY m.user_id
-    ORDER BY message_count DESC
-    LIMIT ${pageSize} OFFSET ${offset}
-  ) AS t
-  LEFT JOIN latest_usernames u ON t.user_id = u.user_id
-  ORDER BY t.message_count DESC
-`;
+  // User message counts with pagination
+  const dataSql = `
+    SELECT
+      t.user_id,
+      u.username,
+      t.message_count
+    FROM (
+      SELECT 
+        m.user_id,
+        COUNT(*) AS message_count
+      FROM "${channel}" m
+      ${whereClause}
+      GROUP BY m.user_id
+      ORDER BY message_count DESC
+      LIMIT $${paramIndex++} OFFSET $${paramIndex++}
+    ) AS t
+    LEFT JOIN latest_usernames u ON t.user_id = u.user_id
+    ORDER BY t.message_count DESC
+  `;
 
+  params.push(pageSize, offset); // push limit and offset as last parameters
+
+  // Table stats query
   const tableStatsSql = `
     SELECT 
-      table_name AS table_name, 
-      table_rows AS row_count, 
-      ROUND((data_length + index_length) / 1024 / 1024, 2) AS allocated_mb
-    FROM information_schema.tables 
-    WHERE table_schema = 'osu_logger'
+      table_name,
+      pg_total_relation_size(quote_ident(table_name)) AS size_bytes,
+      (SELECT reltuples::bigint FROM pg_class WHERE relname = table_name) AS row_count
+    FROM information_schema.tables
+    WHERE table_schema = 'public'
       AND table_name != 'latest_usernames'
   `;
 
-  db.execute(countSql, params, (countErr, countResults) => {
-    if (countErr) {
-      console.error('Count query error:', countErr);
-      return res.status(500).json({ error: 'Internal server error' });
-    }
+  try {
+    const countParams = [];
+    if (timeStart !== null) countParams.push(timeStart);
+    if (timeEnd !== null) countParams.push(timeEnd);
+    const totalResult = await db.query(countSql, countParams);
 
-    const total = countResults[0].total;
+    const total = totalResult.rows[0].total;
 
-    db.execute(dataSql, params, (err, results) => {
-      if (err) {
-        console.error('Data query error:', err);
-        return res.status(500).json({ error: 'Internal server error' });
-      }
+    const dataResult = await db.query(dataSql, params);
+    const tableStatsResult = await db.query(tableStatsSql);
 
-      db.query(tableStatsSql, (tableErr, tableResults) => {
-        if (tableErr) {
-          console.error('Table stats error:', tableErr);
-          return res.status(500).json({ error: 'Failed to retrieve table stats' });
-        }
-        res.json({
-          items: results,
-          total,
-          tableStats: tableResults
-        });
-      });
+    const items = dataResult.rows.map(r => ({
+        user_id: parseInt(r.user_id, 10),
+        message_count: parseInt(r.message_count, 10),
+        username: r.username || ''
+    }));
+
+    const tableStats = tableStatsResult.rows.map(t => ({
+        table_name: t.table_name,
+        row_count: parseInt(t.row_count, 10),
+        allocated_mb: parseFloat((t.size_bytes / 1024 / 1024).toFixed(2))
+    }));
+
+    res.json({
+        items,
+        total,
+        tableStats
     });
-  });
+  } catch (err) {
+    console.error('Error in /api/log/info:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
-// ###########################
-//           YTDL
-// ###########################
 
-// removed
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 // #####################
 //     CHAT WEBSITE
@@ -688,8 +737,8 @@ function ipConnectionGuard(req, res, next) {
 
 app.set('trust proxy', true);
 
-const io = require('socket.io')(server, {
-  path: '/api/live/'
+const io = new Server(server, {
+  path: "/api/live/",
 });
 
 // Create a namespace for chat
@@ -852,8 +901,8 @@ app_cursor.use(cors());
 app_cursor.set('trust proxy', true);
 
 
-const io_cursor = require('socket.io')(server_cursor, {
-  path: '/api/live/cursor-ws/'
+const io_cursor = new Server(server_cursor, {
+  path: "/api/live/cursor-ws/",
 });
 
 const cursorNamespace = io_cursor.of('/cursor-sync');

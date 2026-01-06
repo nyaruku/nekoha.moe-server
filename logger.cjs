@@ -4,6 +4,7 @@
 // ###########################
 
 const mysql = require('mysql2');
+const { Pool } = require('pg');
 const express = require('express');
 const http = require('http');
 const fs = require('fs');
@@ -25,37 +26,16 @@ const globalWebhook = webhookMap['#all-channels'];
 
 const { BanchoClient, OutgoingBanchoMessage, BanchoChannel } = require("bancho.js");
 
-const db = mysql.createPool({
-  host: process.env.DB_HOST,
-  user: process.env.DB_USER,
-  password: process.env.DB_PW,
-  database: process.env.DB_NAME_LOGGER,
-
-  waitForConnections: true,
-  connectionLimit: 1000,
-  maxIdle: 1000, // max idle connections, the default value is the same as `connectionLimit`
-  idleTimeout: 60000, // idle connections timeout, in milliseconds, the default value 60000
-  queueLimit: 0,
-  enableKeepAlive: true,
-  keepAliveInitialDelay: 0,
+const db = new Pool({
+  host: process.env.PG_HOST,
+  user: process.env.PG_USER,
+  password: process.env.PG_PW,
+  database: process.env.PG_NAME_LOGGER,
+  max: 100, // max connections
+  idleTimeoutMillis: 60000,
+  connectionTimeoutMillis: 2000
 });
 
-/* not used
-const db_info = mysql.createPool({
-  host: process.env.DB_HOST,
-  user: process.env.DB_USER,
-  password: process.env.DB_PW,
-  database: process.env.DB_NAME_LOGGER_INFO,
-
-  waitForConnections: true,
-  connectionLimit: 1000,
-  maxIdle: 1000, // max idle connections, the default value is the same as `connectionLimit`
-  idleTimeout: 60000, // idle connections timeout, in milliseconds, the default value 60000
-  queueLimit: 0,
-  enableKeepAlive: true,
-  keepAliveInitialDelay: 0,
-});
-*/
 const bot_info_webhook = new WebhookClient({ url: process.env.WEBHOOK_INFO });
 
 const username = process.env.OSU_USERNAME;
@@ -147,59 +127,42 @@ async function safeSend(webhook, payload) {
         const userId = message.user.id;
         const username = message.user.ircUsername;
 
-        //recordInsert(true);
-        db.execute(
-          `INSERT INTO \`${tableName}\` (timestamp, user_id, username, message) VALUES (?, ?, ?, ?)`,
-          [unixTimeInSeconds, userId, username, originalMessage],
-          (err) => {
-            if (err) {
-              //recordInsert(false);
-              console.error("Database error:", err);
-              return;
-            }
-
-            // Get the most recent ID for this user in this channel
-            db.execute(
-              `SELECT MAX(id) AS max_id FROM \`${tableName}\` WHERE user_id = ?`,
-              [userId],
-              (err, [row]) => {
-                if (err || !row || row.max_id == null) {
-                  console.error("Failed to get max_id:", err || "No row");
-                  return;
-                }
-
-                const lastSeenId = row.max_id;
-
-                // Update the global latest_usernames cache
-                db.execute(
-                  `
-                  INSERT INTO latest_usernames (user_id, username, last_seen_channel, timestamp)
-                  VALUES (?, ?, ?, ?)
-                  ON DUPLICATE KEY UPDATE
-                    username = IF(VALUES(timestamp) > timestamp, VALUES(username), username),
-                    last_seen_channel = IF(VALUES(timestamp) > timestamp, VALUES(last_seen_channel), last_seen_channel),
-                    timestamp = GREATEST(VALUES(timestamp), timestamp)
-                  `,
-                  [userId, username, tableName, unixTimeInSeconds],
-                  (err) => {
-                    if (err) {
-                      console.error("Failed to update latest_usernames:", err);
-                    }
-                  }
-                );
-              }
+        try {
+            await db.query(
+                `INSERT INTO ${tableName} (timestamp, user_id, username, message) VALUES ($1,$2,$3,$4)`,
+                [unixTimeInSeconds, userId, username, originalMessage]
             );
-          }
-        );
-        db.execute(
-          `INSERT INTO \`allm\` (timestamp, user_id, username, message, channel) VALUES (?, ?, ?, ?, ?)`,
-          [unixTimeInSeconds, userId, username, originalMessage, tableName],
-          (err) => {
-            if (err) {
-              console.error("Database error:", err);
-              return;
-            }
-        });
+
+            // Get the latest ID for this user in this channel
+            const { rows } = await db.query(`SELECT MAX(id) AS max_id FROM ${tableName} WHERE user_id=$1`, [userId]);
+            const lastSeenId = rows[0]?.max_id;
+
+            // Update global latest_usernames
+            await db.query(`
+                INSERT INTO latest_usernames (user_id, username, last_seen_channel, timestamp)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (user_id)
+                DO UPDATE SET
+                    username = EXCLUDED.username,
+                    last_seen_channel = EXCLUDED.last_seen_channel,
+                    timestamp = GREATEST(latest_usernames.timestamp, EXCLUDED.timestamp)
+                `, [userId, username, tableName, unixTimeInSeconds]
+            );
+        } catch (err) {
+            console.error("Database error:", err);
+        }
+
+
+        // Insert into "allm" table
+        try {
+            await db.query(
+                `INSERT INTO allm (timestamp, user_id, username, message, channel) VALUES ($1,$2,$3,$4,$5)`,
+                [unixTimeInSeconds, userId, username, originalMessage, tableName]
+            );
+        } catch (err) {
+            console.error("Allm insert error:", err);
+        }
+
         const newUsername = `${username} (${userId})`;
         console.log(newUsername);
         const safeContent = originalMessage.replace(/@/g, " ");
